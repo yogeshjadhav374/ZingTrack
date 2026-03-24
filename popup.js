@@ -1,9 +1,8 @@
 // Constants
-const WORK_MS = 9 * 60 * 60 * 1000;           // 9 hours total per day
-const BREAK_ALLOWANCE_MS = 30 * 60 * 1000;    // 30 min break per day
-const WORK_ONLY_MS = WORK_MS - BREAK_ALLOWANCE_MS; // 8h 30m actual work
+const WORK_MS = 9 * 60 * 60 * 1000;
+const BREAK_ALLOWANCE_MS = 30 * 60 * 1000;
 const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 42; // ~263.89
+const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 42;
 
 // DOM refs
 const $ = (id) => document.getElementById(id);
@@ -13,11 +12,16 @@ const els = {
   btnAuto: $('btnAuto'),
   manualMode: $('manualMode'),
   autoMode: $('autoMode'),
+  // Day selector
+  btnPrevDay: $('btnPrevDay'),
+  btnNextDay: $('btnNextDay'),
+  selectedDayName: $('selectedDayName'),
+  selectedDayDate: $('selectedDayDate'),
   // Manual mode
   timeInput: $('timeInput'),
   btnAddTime: $('btnAddTime'),
   timestampList: $('timestampList'),
-  btnClearToday: $('btnClearToday'),
+  btnClearDay: $('btnClearDay'),
   // Auto mode
   statusBanner: $('statusBanner'),
   statusText: $('statusText'),
@@ -25,6 +29,7 @@ const els = {
   lastSwipe: $('lastSwipe'),
   spentToday: $('spentToday'),
   // Progress
+  progressTitle: $('progressTitle'),
   dayProgress: $('dayProgress'),
   progressPercent: $('progressPercent'),
   officeTime: $('officeTime'),
@@ -46,8 +51,9 @@ const els = {
 };
 
 // State
-let mode = 'manual'; // 'manual' or 'auto'
-let todayTimestamps = []; // array of epoch ms timestamps for today
+let mode = 'manual';
+let selectedDate = getTodayStr(); // YYYY-MM-DD of the day being viewed/edited
+let allTimestamps = {};           // { "2026-03-24": [ts1, ts2, ...], ... }
 let weekData = null;
 let portalData = null;
 
@@ -56,27 +62,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadAll();
   updateUI();
   bindEvents();
-
-  // Live update every second
   setInterval(() => updateUI(), 1000);
 });
 
 async function loadAll() {
-  const stored = await chrome.storage.local.get(['mode', 'todayTimestamps', 'todayDate', 'weekData', 'portalData']);
-
+  const stored = await chrome.storage.local.get(['mode', 'allTimestamps', 'weekData', 'portalData']);
   mode = stored.mode || 'manual';
   portalData = stored.portalData || null;
-
-  const today = getTodayStr();
-
-  // If stored timestamps are from a different day, archive them first
-  if (stored.todayDate && stored.todayDate !== today && stored.todayTimestamps && stored.todayTimestamps.length > 0) {
-    await archiveDayData(stored.todayDate, stored.todayTimestamps);
-    todayTimestamps = [];
-    await chrome.storage.local.set({ todayTimestamps: [], todayDate: today });
-  } else {
-    todayTimestamps = stored.todayTimestamps || [];
-  }
+  allTimestamps = stored.allTimestamps || {};
 
   // Load week data
   weekData = stored.weekData || getEmptyWeekData();
@@ -85,11 +78,6 @@ async function loadAll() {
     weekData = getEmptyWeekData();
     await chrome.storage.local.set({ weekData });
   }
-
-  // Ensure todayDate is set
-  if (!stored.todayDate || stored.todayDate !== today) {
-    await chrome.storage.local.set({ todayDate: today });
-  }
 }
 
 function bindEvents() {
@@ -97,17 +85,22 @@ function bindEvents() {
   els.btnManual.addEventListener('click', () => switchMode('manual'));
   els.btnAuto.addEventListener('click', () => switchMode('auto'));
 
+  // Day navigation
+  els.btnPrevDay.addEventListener('click', () => navigateDay(-1));
+  els.btnNextDay.addEventListener('click', () => navigateDay(1));
+
   // Add timestamp
   els.btnAddTime.addEventListener('click', () => addTimestamp());
   els.timeInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addTimestamp();
   });
 
-  // Clear today
-  els.btnClearToday.addEventListener('click', async () => {
-    if (!confirm('Clear all timestamps for today?')) return;
-    todayTimestamps = [];
-    await chrome.storage.local.set({ todayTimestamps: [] });
+  // Clear day
+  els.btnClearDay.addEventListener('click', async () => {
+    const label = isToday(selectedDate) ? 'today' : formatDateShort(selectedDate);
+    if (!confirm(`Clear all timestamps for ${label}?`)) return;
+    allTimestamps[selectedDate] = [];
+    await saveTimestamps();
     updateUI();
   });
 
@@ -115,33 +108,65 @@ function bindEvents() {
   els.btnResetWeek.addEventListener('click', async () => {
     if (!confirm('Reset entire week data?')) return;
     weekData = getEmptyWeekData();
-    todayTimestamps = [];
-    await chrome.storage.local.set({ weekData, todayTimestamps: [], todayDate: getTodayStr() });
+    // Clear all timestamps for this week
+    const monday = getMonday(new Date());
+    for (let i = 0; i < 5; i++) {
+      const d = new Date(monday);
+      d.setDate(d.getDate() + i);
+      const key = dateToStr(d);
+      delete allTimestamps[key];
+    }
+    await chrome.storage.local.set({ weekData, allTimestamps });
     updateUI();
   });
+
+  // Week day click to select
+  els.weekGrid.addEventListener('click', (e) => {
+    const dayEl = e.target.closest('.week-day');
+    if (!dayEl) return;
+    const idx = parseInt(dayEl.dataset.index, 10);
+    if (isNaN(idx)) return;
+    const monday = getMonday(new Date());
+    const target = new Date(monday);
+    target.setDate(target.getDate() + idx);
+    const targetStr = dateToStr(target);
+    // Only allow selecting today or past days
+    if (targetStr <= getTodayStr()) {
+      selectedDate = targetStr;
+      updateUI();
+    }
+  });
+}
+
+// ─── Day Navigation ───
+function navigateDay(delta) {
+  const current = new Date(selectedDate + 'T00:00:00');
+  current.setDate(current.getDate() + delta);
+  const newDateStr = dateToStr(current);
+
+  // Can't go into the future
+  if (newDateStr > getTodayStr()) return;
+
+  // Only navigate within the current week (Mon-Fri)
+  const monday = getMonday(new Date());
+  const mondayStr = dateToStr(monday);
+  if (newDateStr < mondayStr) return;
+
+  selectedDate = newDateStr;
+  updateUI();
 }
 
 async function switchMode(newMode) {
   mode = newMode;
   await chrome.storage.local.set({ mode });
-  updateModeUI();
   updateUI();
 }
 
-function updateModeUI() {
-  els.btnManual.classList.toggle('active', mode === 'manual');
-  els.btnAuto.classList.toggle('active', mode === 'auto');
-  els.manualMode.style.display = mode === 'manual' ? 'block' : 'none';
-  els.autoMode.style.display = mode === 'auto' ? 'block' : 'none';
-}
-
 // ─── Timestamp Parsing ───
-// Accepts formats: "11:58 am", "11:58am", "1:51 PM", "13:51", "9:00"
 function parseTimeInput(str) {
   str = str.trim().toLowerCase();
   if (!str) return null;
 
-  // Match "HH:MM am/pm" or "HH:MM"
   const match = str.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/);
   if (!match) return null;
 
@@ -159,9 +184,9 @@ function parseTimeInput(str) {
     if (hours < 0 || hours > 23) return null;
   }
 
-  // Create a Date for today with the given time
-  const now = new Date();
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
+  // Create a Date for the SELECTED day with the given time
+  const d = new Date(selectedDate + 'T00:00:00');
+  d.setHours(hours, minutes, 0, 0);
   return d.getTime();
 }
 
@@ -169,87 +194,101 @@ async function addTimestamp() {
   const raw = els.timeInput.value.trim();
   if (!raw) return;
 
-  const ts = parseTimeInput(raw);
-  if (!ts) {
+  // Split by comma, semicolon, or pipe to accept multiple timestamps at once
+  const parts = raw.split(/[,;|]+/).map(s => s.trim()).filter(Boolean);
+  const parsed = [];
+  let hasError = false;
+
+  for (const part of parts) {
+    const ts = parseTimeInput(part);
+    if (!ts) {
+      hasError = true;
+      break;
+    }
+    parsed.push(ts);
+  }
+
+  if (hasError || parsed.length === 0) {
     els.timeInput.style.borderColor = '#ef4444';
     setTimeout(() => { els.timeInput.style.borderColor = ''; }, 1500);
     return;
   }
 
-  todayTimestamps.push(ts);
-  // Sort timestamps chronologically
-  todayTimestamps.sort((a, b) => a - b);
+  if (!allTimestamps[selectedDate]) allTimestamps[selectedDate] = [];
+  allTimestamps[selectedDate].push(...parsed);
+  allTimestamps[selectedDate].sort((a, b) => a - b);
 
-  await chrome.storage.local.set({ todayTimestamps, todayDate: getTodayStr() });
+  await saveTimestamps();
   els.timeInput.value = '';
   els.timeInput.focus();
   updateUI();
 }
 
 async function removeTimestamp(index) {
-  todayTimestamps.splice(index, 1);
-  await chrome.storage.local.set({ todayTimestamps });
+  if (!allTimestamps[selectedDate]) return;
+  allTimestamps[selectedDate].splice(index, 1);
+  await saveTimestamps();
   updateUI();
 }
 
+async function saveTimestamps() {
+  await chrome.storage.local.set({ allTimestamps });
+}
+
 // ─── Calculations ───
-// Timestamps alternate: IN, OUT, IN, OUT, ...
-// Office time = sum of all (OUT - IN) pairs
-// If odd number of timestamps, last IN is still open (use current time)
-// Break time = gaps between OUT and next IN
-function calculateFromTimestamps(timestamps) {
+function calculateFromTimestamps(timestamps, useNowForOpen) {
   let officeMs = 0;
   let breakMs = 0;
   const now = Date.now();
 
-  if (timestamps.length === 0) return { officeMs: 0, breakMs: 0, workMs: 0, isActive: false };
+  if (!timestamps || timestamps.length === 0) return { officeMs: 0, breakMs: 0 };
 
   const pairs = [];
   for (let i = 0; i < timestamps.length; i += 2) {
     const inTime = timestamps[i];
-    const outTime = (i + 1 < timestamps.length) ? timestamps[i + 1] : now;
-    pairs.push({ inTime, outTime, isOpen: (i + 1 >= timestamps.length) });
+    const outTime = (i + 1 < timestamps.length) ? timestamps[i + 1] : (useNowForOpen ? now : inTime);
+    pairs.push({ inTime, outTime });
   }
 
-  // Calculate office time (sum of IN-OUT durations)
   for (const pair of pairs) {
     officeMs += pair.outTime - pair.inTime;
   }
 
-  // Calculate break time (gaps between consecutive pairs)
   for (let i = 1; i < pairs.length; i++) {
     const gap = pairs[i].inTime - pairs[i - 1].outTime;
     if (gap > 0) breakMs += gap;
   }
 
-  const workMs = Math.max(0, officeMs - breakMs);
-  const isActive = pairs.length > 0 && pairs[pairs.length - 1].isOpen;
-
-  // Total time from first IN to now (or last OUT)
-  // officeMs here is pure "in-office" time (sum of IN-OUT)
-  // breakMs is the gap time between sessions
-
-  return { officeMs, breakMs, workMs, isActive };
+  return { officeMs, breakMs };
 }
 
 // ─── UI ───
 function updateUI() {
   const now = new Date();
-  const dayIndex = now.getDay() - 1; // 0=Mon .. 4=Fri
-  const dayName = WEEK_DAYS[Math.max(0, Math.min(dayIndex, 4))];
-  els.dayBadge.textContent = dayName;
+  const todayIndex = now.getDay() - 1;
+  els.dayBadge.textContent = WEEK_DAYS[Math.max(0, Math.min(todayIndex, 4))];
 
-  updateModeUI();
-  renderTimestampList();
+  // Mode
+  els.btnManual.classList.toggle('active', mode === 'manual');
+  els.btnAuto.classList.toggle('active', mode === 'auto');
+  els.manualMode.style.display = mode === 'manual' ? 'block' : 'none';
+  els.autoMode.style.display = mode === 'auto' ? 'block' : 'none';
+
+  // Day selector
+  updateDaySelector();
+
+  // Get timestamps for selected day
+  const selectedTs = allTimestamps[selectedDate] || [];
+  const viewingToday = isToday(selectedDate);
 
   let officeMs = 0, breakMs = 0;
 
   if (mode === 'manual') {
-    const calc = calculateFromTimestamps(todayTimestamps);
+    renderTimestampList(selectedTs, viewingToday);
+    const calc = calculateFromTimestamps(selectedTs, viewingToday);
     officeMs = calc.officeMs;
     breakMs = calc.breakMs;
   } else {
-    // Auto mode - from portal data
     if (portalData && portalData.spentToday && portalData.spentToday !== '--:--') {
       officeMs = parseHHMM(portalData.spentToday);
     }
@@ -257,13 +296,14 @@ function updateUI() {
     updateAutoUI();
   }
 
-  // ── Today's Progress (based on total office time = officeMs + breakMs) ──
-  const totalPresenceMs = officeMs + breakMs; // total time from first IN to last OUT/now
-  // Actually for manual: officeMs is IN-office time, breakMs is gap time
-  // Total wall clock time = officeMs + breakMs
-  // The 9hr target includes 30min break, so progress should be based on total presence
+  // Progress title
+  els.progressTitle.textContent = viewingToday ? "Today's Progress" : `${formatDayName(selectedDate)} Progress`;
+
+  // Total presence
+  const totalPresenceMs = officeMs + breakMs;
+
   els.officeTime.textContent = fmtTime(totalPresenceMs);
-  els.workTime.textContent = fmtTime(officeMs); // actual working time (in-office, excludes breaks)
+  els.workTime.textContent = fmtTime(officeMs);
   const remainMs = Math.max(0, WORK_MS - totalPresenceMs);
   els.remainingTime.textContent = fmtTime(remainMs);
 
@@ -272,8 +312,9 @@ function updateUI() {
   els.progressPercent.textContent = Math.round(progress) + '%';
   els.dayProgress.classList.toggle('complete', progress >= 100);
 
-  // ── Break calculation ──
-  const carryOverMs = calculateCarryOver(dayIndex);
+  // Break
+  const selectedDayIndex = getDayIndex(selectedDate);
+  const carryOverMs = calculateCarryOver(selectedDayIndex);
   const totalAvailableMs = BREAK_ALLOWANCE_MS + carryOverMs;
   const breakRemainingMs = Math.max(0, totalAvailableMs - breakMs);
   const isOver = breakMs > totalAvailableMs;
@@ -283,59 +324,73 @@ function updateUI() {
   els.totalBreakAvailable.textContent = fmtMin(totalAvailableMs);
   els.breakRemaining.textContent = fmtMin(breakRemainingMs);
 
-  // Break circle
   const ratio = Math.min(1, breakMs / (totalAvailableMs || 1));
   els.breakArc.style.strokeDashoffset = CIRCLE_CIRCUMFERENCE * (1 - ratio);
   els.breakArc.classList.toggle('over', isOver);
 
   const highlightStrong = els.breakRemaining.closest('.break-row').querySelector('strong');
-  if (highlightStrong) highlightStrong.style.color = isOver ? '#f87171' : '#4ade80';
+  if (highlightStrong) highlightStrong.style.color = isOver ? '#dc2626' : '#16a34a';
 
-  // Break note
   if (isOver) {
     els.breakNote.textContent = 'Break exceeded by ' + fmtMin(breakMs - totalAvailableMs) + '!';
     els.breakNote.className = 'break-note visible warning';
   } else if (breakRemainingMs > 0 && breakMs > 0) {
-    els.breakNote.textContent = 'You can still take ' + fmtMin(breakRemainingMs) + ' break today';
+    els.breakNote.textContent = 'You can still take ' + fmtMin(breakRemainingMs) + ' break';
     els.breakNote.className = 'break-note visible';
   } else {
     els.breakNote.className = 'break-note';
   }
 
-  // ── Weekly ──
-  updateWeekGrid(dayIndex, totalPresenceMs, breakMs);
-  updateWeekTotals(dayIndex, totalPresenceMs, breakMs);
+  // Weekly
+  updateWeekGrid(selectedDate);
+  updateWeekTotals();
 }
 
-function renderTimestampList() {
-  if (mode !== 'manual') return;
+function updateDaySelector() {
+  const today = getTodayStr();
+  const monday = dateToStr(getMonday(new Date()));
 
+  // Update label
+  if (isToday(selectedDate)) {
+    els.selectedDayName.textContent = 'Today';
+  } else {
+    els.selectedDayName.textContent = formatDayName(selectedDate);
+  }
+  els.selectedDayDate.textContent = formatDateShort(selectedDate);
+
+  // Disable next if already today
+  els.btnNextDay.disabled = (selectedDate >= today);
+  // Disable prev if already Monday of this week
+  els.btnPrevDay.disabled = (selectedDate <= monday);
+}
+
+function renderTimestampList(timestamps, useNowForOpen) {
   els.timestampList.innerHTML = '';
-  if (todayTimestamps.length === 0) {
-    els.timestampList.innerHTML = '<div style="text-align:center;color:#475569;font-size:11px;padding:12px;">No timestamps yet. Add your first swipe time above.</div>';
+  if (!timestamps || timestamps.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'ts-empty';
+    empty.textContent = 'No timestamps yet. Add your first swipe time above.';
+    els.timestampList.appendChild(empty);
     return;
   }
 
   const now = Date.now();
 
-  todayTimestamps.forEach((ts, i) => {
+  timestamps.forEach((ts, i) => {
     const isIn = i % 2 === 0;
     const type = isIn ? 'IN' : 'OUT';
     const time = new Date(ts);
     const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
 
-    // Calculate duration for this segment
     let durationStr = '';
     if (isIn) {
-      // IN timestamp - show duration until next OUT or now
-      const outTs = (i + 1 < todayTimestamps.length) ? todayTimestamps[i + 1] : now;
+      const outTs = (i + 1 < timestamps.length) ? timestamps[i + 1] : (useNowForOpen ? now : ts);
       const dur = outTs - ts;
-      durationStr = fmtTime(dur);
+      if (dur > 0) durationStr = fmtTime(dur);
     } else {
-      // OUT timestamp - show break duration until next IN
-      if (i + 1 < todayTimestamps.length) {
-        const gap = todayTimestamps[i + 1] - ts;
-        durationStr = fmtTime(gap) + ' break';
+      if (i + 1 < timestamps.length) {
+        const gap = timestamps[i + 1] - ts;
+        if (gap > 0) durationStr = fmtTime(gap) + ' break';
       }
     }
 
@@ -351,7 +406,6 @@ function renderTimestampList() {
     els.timestampList.appendChild(div);
   });
 
-  // Bind remove buttons
   els.timestampList.querySelectorAll('.ts-remove').forEach(btn => {
     btn.addEventListener('click', () => {
       removeTimestamp(parseInt(btn.dataset.index, 10));
@@ -383,40 +437,47 @@ function updateAutoUI() {
   els.spentToday.textContent = portalData.spentToday || '--:--';
 }
 
-function calculateCarryOver(todayIndex) {
-  // Sum unused break from previous completed days this week
+function calculateCarryOver(dayIndex) {
   let carry = 0;
-  for (let i = 0; i < todayIndex && i < 5; i++) {
-    const day = weekData.days[i];
-    if (day && day.officeMs > 0) {
-      // Unused break = allowance - break used that day
-      const unused = Math.max(0, BREAK_ALLOWANCE_MS - (day.breakMs || 0));
+  const monday = getMonday(new Date());
+  for (let i = 0; i < dayIndex && i < 5; i++) {
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    const dateStr = dateToStr(d);
+    const ts = allTimestamps[dateStr] || [];
+    if (ts.length > 0) {
+      const calc = calculateFromTimestamps(ts, false);
+      const unused = Math.max(0, BREAK_ALLOWANCE_MS - calc.breakMs);
       carry += unused;
     }
   }
   return carry;
 }
 
-function updateWeekGrid(todayIndex, todayOfficeMs, todayBreakMs) {
+function updateWeekGrid(selectedDateStr) {
   els.weekGrid.innerHTML = '';
+  const monday = getMonday(new Date());
+  const todayStr = getTodayStr();
+
   for (let i = 0; i < 5; i++) {
-    const day = weekData.days[i] || {};
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    const dateStr = dateToStr(d);
+    const ts = allTimestamps[dateStr] || [];
+    const isViewingToday = (dateStr === todayStr);
+    const calc = calculateFromTimestamps(ts, isViewingToday);
+    const total = calc.officeMs + calc.breakMs;
+
     const div = document.createElement('div');
     div.className = 'week-day';
+    div.dataset.index = i;
 
-    if (i === todayIndex) div.classList.add('today');
-    if (day.completed) div.classList.add('completed');
+    if (dateStr === todayStr) div.classList.add('today');
+    if (dateStr === selectedDateStr) div.classList.add('selected');
+    if (total >= WORK_MS) div.classList.add('completed');
 
-    let officeStr = '--';
-    let breakStr = '--';
-
-    if (i === todayIndex) {
-      officeStr = fmtTimeShort(todayOfficeMs);
-      breakStr = fmtMin(todayBreakMs);
-    } else if (day.officeMs !== undefined && day.officeMs > 0) {
-      officeStr = fmtTimeShort(day.officeMs);
-      breakStr = fmtMin(day.breakMs || 0);
-    }
+    const officeStr = ts.length > 0 ? fmtTimeShort(total) : '--';
+    const breakStr = ts.length > 0 ? fmtMin(calc.breakMs) : '--';
 
     div.innerHTML = `
       <div class="week-day-name">${WEEK_DAYS[i]}</div>
@@ -427,15 +488,21 @@ function updateWeekGrid(todayIndex, todayOfficeMs, todayBreakMs) {
   }
 }
 
-function updateWeekTotals(todayIndex, todayOfficeMs, todayBreakMs) {
-  let totalOffice = todayOfficeMs;
-  let totalBreak = todayBreakMs;
+function updateWeekTotals() {
+  const monday = getMonday(new Date());
+  const todayStr = getTodayStr();
+  let totalOffice = 0;
+  let totalBreak = 0;
 
   for (let i = 0; i < 5; i++) {
-    if (i === todayIndex) continue;
-    const day = weekData.days[i] || {};
-    totalOffice += day.officeMs || 0;
-    totalBreak += day.breakMs || 0;
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    const dateStr = dateToStr(d);
+    const ts = allTimestamps[dateStr] || [];
+    if (ts.length === 0) continue;
+    const calc = calculateFromTimestamps(ts, dateStr === todayStr);
+    totalOffice += calc.officeMs + calc.breakMs;
+    totalBreak += calc.breakMs;
   }
 
   const totalWeekBreakBudget = 5 * BREAK_ALLOWANCE_MS;
@@ -446,50 +513,21 @@ function updateWeekTotals(todayIndex, todayOfficeMs, todayBreakMs) {
   els.weekBreakLeft.textContent = fmtMin(breakLeft);
 }
 
-// ─── Day Archive ───
-async function archiveDayData(dateStr, timestamps) {
-  const stored = await chrome.storage.local.get(['weekData']);
-  const wd = stored.weekData || getEmptyWeekData();
-
-  const d = new Date(dateStr);
-  const dayIndex = d.getDay() - 1; // 0=Mon..4=Fri
-
-  if (dayIndex < 0 || dayIndex > 4) return; // Weekend, skip
-
-  const calc = calculateFromTimestamps(timestamps);
-  const totalPresence = calc.officeMs + calc.breakMs;
-
-  wd.days[dayIndex] = {
-    officeMs: totalPresence,
-    breakMs: calc.breakMs,
-    completed: totalPresence > 0
-  };
-
-  await chrome.storage.local.set({ weekData: wd });
-  weekData = wd;
-}
-
 // ─── Helpers ───
 function parseHHMM(timeStr) {
   const parts = timeStr.split(':');
   if (parts.length !== 2) return 0;
-  const h = parseInt(parts[0], 10) || 0;
-  const m = parseInt(parts[1], 10) || 0;
-  return (h * 60 + m) * 60 * 1000;
+  return (parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10)) * 60 * 1000;
 }
 
 function fmtTime(ms) {
   const totalMin = Math.floor(Math.abs(ms) / 60000);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  return `${h}h ${m}m`;
+  return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`;
 }
 
 function fmtTimeShort(ms) {
   const totalMin = Math.floor(Math.abs(ms) / 60000);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  return `${h}:${String(m).padStart(2, '0')}`;
+  return `${Math.floor(totalMin / 60)}:${String(totalMin % 60).padStart(2, '0')}`;
 }
 
 function fmtMin(ms) {
@@ -497,7 +535,33 @@ function fmtMin(ms) {
 }
 
 function getTodayStr() {
-  return new Date().toISOString().split('T')[0];
+  return dateToStr(new Date());
+}
+
+function dateToStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function isToday(dateStr) {
+  return dateStr === getTodayStr();
+}
+
+function getDayIndex(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.getDay() - 1; // 0=Mon..4=Fri
+}
+
+function formatDayName(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString([], { weekday: 'long' });
+}
+
+function formatDateShort(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
 }
 
 function getMonday(date) {
