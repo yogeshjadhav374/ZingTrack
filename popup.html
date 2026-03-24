@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZingTrack</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>ZingTrack</h1>
+      <div class="header-right">
+        <span class="badge" id="dayBadge">Mon</span>
+      </div>
+    </div>
+
+    <!-- Mode Toggle -->
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="btnManual" data-mode="manual">Manual</button>
+      <button class="mode-btn" id="btnAuto" data-mode="auto">Auto (Portal)</button>
+    </div>
+
+    <!-- Manual Mode -->
+    <div id="manualMode">
+      <div class="card">
+        <div class="card-title">Swipe Times</div>
+
+        <!-- Day Selector -->
+        <div class="day-selector">
+          <button class="day-nav" id="btnPrevDay">&lsaquo;</button>
+          <div class="day-label">
+            <span id="selectedDayName">Today</span>
+            <span class="day-date" id="selectedDayDate"></span>
+          </div>
+          <button class="day-nav" id="btnNextDay">&rsaquo;</button>
+        </div>
+
+        <div class="timestamp-help">Timestamps alternate: 1st = IN, 2nd = OUT, 3rd = IN, ...</div>
+        <div class="timestamp-input-row">
+          <input type="text" id="timeInput" placeholder="e.g. 11:58 am" class="time-input" />
+          <button class="btn-add" id="btnAddTime">+ Add</button>
+        </div>
+        <div class="timestamp-list" id="timestampList"></div>
+        <div class="timestamp-actions">
+          <button class="btn-link danger" id="btnClearDay">Clear Day</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auto Mode -->
+    <div id="autoMode" style="display:none;">
+      <div class="card">
+        <div class="card-title">Zing Portal</div>
+        <div class="status-banner no-portal" id="statusBanner">
+          <span id="statusText">Open zingnext.zinghr.com to sync</span>
+        </div>
+        <div class="portal-info">
+          <div class="portal-row">
+            <span>Punch Status</span>
+            <strong id="punchStatus">--</strong>
+          </div>
+          <div class="portal-row">
+            <span>Last Swipe</span>
+            <strong id="lastSwipe">--</strong>
+          </div>
+          <div class="portal-row">
+            <span>Spent Today (Portal)</span>
+            <strong id="spentToday">--:--</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Selected Day Overview -->
+    <div class="card">
+      <div class="card-title" id="progressTitle">Today's Progress</div>
+      <div class="progress-bar-container">
+        <div class="progress-bar" id="dayProgress"></div>
+      </div>
+      <div class="progress-labels">
+        <span id="progressPercent">0%</span>
+        <span id="progressTarget">Target: 9h 0m</span>
+      </div>
+      <div class="stats-row">
+        <div class="stat">
+          <span class="stat-label">Office Time</span>
+          <span class="stat-value" id="officeTime">0h 0m</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Work Time</span>
+          <span class="stat-value" id="workTime">0h 0m</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Remaining</span>
+          <span class="stat-value" id="remainingTime">9h 0m</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Break Tracker -->
+    <div class="card">
+      <div class="card-title">Break Time</div>
+      <div class="break-stats">
+        <div class="break-circle">
+          <svg viewBox="0 0 100 100">
+            <circle class="bg" cx="50" cy="50" r="42"></circle>
+            <circle class="fill" cx="50" cy="50" r="42" id="breakArc"></circle>
+          </svg>
+          <div class="break-center">
+            <span id="breakUsed">0m</span>
+            <small>used</small>
+          </div>
+        </div>
+        <div class="break-info">
+          <div class="break-row">
+            <span>Today's Allowance</span>
+            <strong>30m</strong>
+          </div>
+          <div class="break-row">
+            <span>Carried Over</span>
+            <strong id="carriedOver">0m</strong>
+          </div>
+          <div class="break-row">
+            <span>Total Available</span>
+            <strong id="totalBreakAvailable">30m</strong>
+          </div>
+          <div class="break-row highlight">
+            <span>Remaining</span>
+            <strong id="breakRemaining">30m</strong>
+          </div>
+        </div>
+      </div>
+      <div class="break-note" id="breakNote"></div>
+    </div>
+
+    <!-- Weekly Summary -->
+    <div class="card">
+      <div class="card-title">Weekly Summary</div>
+      <div class="week-grid" id="weekGrid"></div>
+      <div class="weekly-totals">
+        <div class="stat">
+          <span class="stat-label">Week Office</span>
+          <span class="stat-value" id="weekOffice">0h 0m</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Break Used</span>
+          <span class="stat-value" id="weekBreakUsed">0m</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Break Left</span>
+          <span class="stat-value" id="weekBreakLeft">150m</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <button class="btn-link danger" id="btnResetWeek">Reset Week</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
