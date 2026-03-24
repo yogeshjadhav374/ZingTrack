@@ -3,7 +3,7 @@
   "name": "ZingTrack - Time & Break Tracker",
   "version": "3.0.0",
   "description": "Track office hours and break time for Zing portal. 9hr/day, 30min break, weekly carry-over. Manual + Auto modes.",
-  "permissions": ["storage", "alarms"],
+  "permissions": ["storage", "alarms", "activeTab", "tabs"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -15,6 +15,7 @@
   "background": {
     "service_worker": "background.js"
   },
+  "host_permissions": ["*://zingnext.zinghr.com/*"],
   "content_scripts": [
     {
       "matches": ["*://zingnext.zinghr.com/*"],

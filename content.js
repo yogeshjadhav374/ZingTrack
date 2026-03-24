@@ -1,161 +1,408 @@
 // Content script - runs on zingnext.zinghr.com
-// Scrapes punch-in/out times and "Spent Today" from the portal
+// Scrapes: Raw Swipes from calendar tooltip, Spent Today, Punch status
 
 (function () {
   'use strict';
 
-  const SCRAPE_INTERVAL = 30000; // scrape every 30 seconds
-  let lastData = null;
+  const SCRAPE_INTERVAL = 30000;
 
-  function scrapePortalData() {
+  function isExtensionValid() {
+    try { return !!chrome.runtime.id; } catch (e) { return false; }
+  }
+
+  // ── Inject script into page's MAIN world to trigger React hover events ──
+  function injectPageScript(code) {
+    return new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.textContent = code;
+      document.documentElement.appendChild(script);
+      script.remove();
+      // Give React time to process
+      setTimeout(resolve, 100);
+    });
+  }
+
+  // ── Trigger tooltip via injected page-context script ──
+  async function triggerTooltipInPageContext() {
+    const today = new Date().getDate();
+
+    // This code runs in the PAGE's world, not the content script's isolated world
+    // So React event handlers will actually fire
+    const injectedCode = `
+    (function() {
+      var today = ${today};
+
+      // Strategy 1: Find MUI calendar day button
+      var btns = document.querySelectorAll(
+        'button.MuiPickersDay-day, button.MuiButtonBase-root.MuiIconButton-root'
+      );
+      var todayBtn = null;
+      for (var i = 0; i < btns.length; i++) {
+        var p = btns[i].querySelector('p, span');
+        var txt = p ? p.textContent.trim() : btns[i].textContent.trim();
+        if (txt === String(today)) {
+          todayBtn = btns[i];
+          break;
+        }
+      }
+
+      // Strategy 2: Find by selectedDate class or MuiPickersDay-current
+      if (!todayBtn) {
+        var selected = document.querySelector('.selectedDate button, .MuiPickersDay-daySelected');
+        if (selected) todayBtn = selected;
+      }
+
+      // Strategy 3: Generic - find any small element with just today's number near calendar context
+      if (!todayBtn) {
+        var allEls = document.querySelectorAll('td, div, span, a, button');
+        for (var j = 0; j < allEls.length; j++) {
+          var el = allEls[j];
+          if (el.textContent.trim() !== String(today)) continue;
+          if (el.children.length > 2 || el.textContent.length > 4) continue;
+          var par = el.closest('[class*="calendar"], [class*="attend"], [role="presentation"]');
+          if (par) { todayBtn = el; break; }
+        }
+      }
+
+      if (!todayBtn) {
+        window.__zingTrackTooltipResult = { error: 'Could not find today element (' + today + ')' };
+        return;
+      }
+
+      // Get element position for realistic mouse events
+      var rect = todayBtn.getBoundingClientRect();
+      var cx = rect.left + rect.width / 2;
+      var cy = rect.top + rect.height / 2;
+
+      // Also try the parent wrapper (div[role="presentation"] or parent div)
+      var wrapper = todayBtn.closest('[role="presentation"]') || todayBtn.parentElement;
+      var wrapperRect = wrapper ? wrapper.getBoundingClientRect() : rect;
+      var wcx = wrapperRect.left + wrapperRect.width / 2;
+      var wcy = wrapperRect.top + wrapperRect.height / 2;
+
+      var evtOpts = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: cx,
+        clientY: cy,
+        screenX: cx,
+        screenY: cy
+      };
+
+      var wEvtOpts = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: wcx,
+        clientY: wcy,
+        screenX: wcx,
+        screenY: wcy
+      };
+
+      // Dispatch on the button itself
+      ['pointerenter', 'pointerover', 'mouseenter', 'mouseover', 'mousemove'].forEach(function(evtName) {
+        todayBtn.dispatchEvent(new PointerEvent(evtName, evtOpts));
+      });
+
+      // Also dispatch on wrapper
+      if (wrapper && wrapper !== todayBtn) {
+        ['pointerenter', 'pointerover', 'mouseenter', 'mouseover', 'mousemove'].forEach(function(evtName) {
+          wrapper.dispatchEvent(new PointerEvent(evtName, wEvtOpts));
+        });
+      }
+
+      // Also try clicking the button (some implementations show tooltip on click)
+      // todayBtn.click(); // commented out - may navigate
+
+      window.__zingTrackTooltipResult = {
+        triggered: true,
+        element: todayBtn.tagName + '.' + todayBtn.className.substring(0, 80),
+        wrapper: wrapper ? wrapper.tagName + '.' + (wrapper.className || '').substring(0, 80) : null,
+        position: { x: cx, y: cy }
+      };
+    })();
+    `;
+
+    await injectPageScript(injectedCode);
+  }
+
+  // ── Close tooltip via injected page-context script ──
+  async function closeTooltipInPageContext() {
+    const today = new Date().getDate();
+    const injectedCode = `
+    (function() {
+      var today = ${today};
+      var btns = document.querySelectorAll(
+        'button.MuiPickersDay-day, button.MuiButtonBase-root.MuiIconButton-root'
+      );
+      var todayBtn = null;
+      for (var i = 0; i < btns.length; i++) {
+        var p = btns[i].querySelector('p, span');
+        var txt = p ? p.textContent.trim() : btns[i].textContent.trim();
+        if (txt === String(today)) { todayBtn = btns[i]; break; }
+      }
+      if (!todayBtn) {
+        var selected = document.querySelector('.selectedDate button, .MuiPickersDay-daySelected');
+        if (selected) todayBtn = selected;
+      }
+      if (!todayBtn) return;
+
+      var rect = todayBtn.getBoundingClientRect();
+      var evtOpts = {
+        bubbles: true, cancelable: true, view: window,
+        clientX: rect.left - 100, clientY: rect.top - 100
+      };
+      ['pointerleave', 'pointerout', 'mouseleave', 'mouseout'].forEach(function(evtName) {
+        todayBtn.dispatchEvent(new PointerEvent(evtName, evtOpts));
+      });
+      var wrapper = todayBtn.closest('[role="presentation"]') || todayBtn.parentElement;
+      if (wrapper && wrapper !== todayBtn) {
+        ['pointerleave', 'pointerout', 'mouseleave', 'mouseout'].forEach(function(evtName) {
+          wrapper.dispatchEvent(new PointerEvent(evtName, evtOpts));
+        });
+      }
+    })();
+    `;
+    await injectPageScript(injectedCode);
+  }
+
+  // ── Main scrape ──
+  async function scrapePortalData() {
     const data = {
       spentToday: null,
       lastSwipe: null,
-      punchStatus: null, // 'in' or 'out'
-      punchInTime: null,
-      punchOutTime: null,
+      punchStatus: null,
+      swipeTimes: [],
+      shift: null,
+      actual: null,
+      hours: null,
+      deficit: null,
+      rawSwipes: null,
       scrapedAt: Date.now(),
-      date: new Date().toISOString().split('T')[0]
+      date: new Date().toISOString().split('T')[0],
+      debug: {}
     };
 
     try {
-      // --- Scrape "Spent Today" ---
-      // Look for the spent today time display (format: HH:MM or --:--)
-      const allElements = document.querySelectorAll('*');
-      for (const el of allElements) {
+      const bodyText = document.body.innerText;
+
+      // ── Spent Today ──
+      const spentPatterns = [
+        /(\d{1,2}\s*:\s*\d{2})\s*\n?\s*Spent\s*Today/i,
+        /Spent\s*Today[\s\S]{0,50}?(\d{1,2}\s*:\s*\d{2})/i
+      ];
+      for (const pat of spentPatterns) {
+        const m = bodyText.match(pat);
+        if (m) { data.spentToday = m[1].replace(/\s/g, ''); break; }
+      }
+
+      // ── Last Swipe ──
+      const lsMatch = bodyText.match(/Last\s*Swipe\s*:?\s*(.+?)(?:\n|Current|$)/i);
+      if (lsMatch) data.lastSwipe = lsMatch[1].trim().substring(0, 30);
+
+      // ── Punch Status ──
+      const allEls = document.querySelectorAll('button, [role="button"], a, div, span');
+      for (const el of allEls) {
         const text = el.textContent.trim();
+        if (text.length > 20) continue;
+        if (/^Punch\s*Out/i.test(text)) { data.punchStatus = 'in'; break; }
+        else if (/^Punch\s*In/i.test(text)) { data.punchStatus = 'out'; break; }
+      }
 
-        // Find "Spent Today" label and get the time value near it
-        if (text === 'Spent Today' || text === 'SpentToday') {
-          // The time is usually in a sibling or parent element
-          const parent = el.closest('div') || el.parentElement;
-          if (parent) {
-            const timeMatch = parent.textContent.match(/(\d{1,2}:\d{2})/);
-            if (timeMatch) {
-              data.spentToday = timeMatch[1];
-            }
+      // ── Trigger tooltip on today's calendar date (in page context) ──
+      await triggerTooltipInPageContext();
+
+      // Wait for tooltip to render
+      await sleep(2500);
+
+      // Read the result from the injected script
+      const resultCode = `
+      (function() {
+        var el = document.createElement('div');
+        el.id = '__zingTrackResult';
+        el.style.display = 'none';
+        el.textContent = JSON.stringify(window.__zingTrackTooltipResult || {});
+        document.body.appendChild(el);
+      })();
+      `;
+      await injectPageScript(resultCode);
+
+      const resultEl = document.getElementById('__zingTrackResult');
+      if (resultEl) {
+        try {
+          const triggerResult = JSON.parse(resultEl.textContent);
+          data.debug.triggerResult = triggerResult;
+        } catch (e) {}
+        resultEl.remove();
+      }
+
+      // Now scrape tooltip content from the DOM
+      // Look for tooltip/popover elements that appeared
+      const tooltipSelectors = [
+        '[role="tooltip"]',
+        '.MuiTooltip-tooltip',
+        '.MuiTooltip-popper',
+        '.MuiPopover-root',
+        '.MuiPopover-paper',
+        '.MuiPopper-root',
+        '[class*="tooltip"]',
+        '[class*="Tooltip"]',
+        '[class*="popover"]',
+        '[class*="Popover"]',
+        '[class*="popup"]'
+      ];
+
+      let tooltipText = '';
+      for (const sel of tooltipSelectors) {
+        const els = document.querySelectorAll(sel);
+        for (const el of els) {
+          const txt = el.innerText || el.textContent || '';
+          if (txt.length > 5 && /raw\s*swipe|shift|actual|hours|deficit/i.test(txt)) {
+            tooltipText = txt;
+            data.debug.tooltipSelector = sel;
+            data.debug.tooltipElement = el.tagName + '.' + (el.className || '').substring(0, 60);
+            break;
+          }
+        }
+        if (tooltipText) break;
+      }
+
+      // Fallback: search the entire body text for tooltip content
+      if (!tooltipText) {
+        tooltipText = document.body.innerText;
+        data.debug.tooltipSelector = 'body (fallback)';
+      }
+
+      // Also look for any newly-appeared elements (tooltip might be a div that just showed up)
+      if (!tooltipText || !/raw\s*swipe/i.test(tooltipText)) {
+        // Search all visible elements for tooltip-like content
+        const allVisible = document.querySelectorAll('div, span, p, td, th, li');
+        for (const el of allVisible) {
+          if (el.offsetParent === null && el.style.display !== 'contents') continue; // hidden
+          const txt = el.innerText || '';
+          if (/Raw\s*Swipes?\s*:?\s*\d/i.test(txt) && txt.length < 500) {
+            tooltipText = txt;
+            data.debug.tooltipSelector = 'visible element scan';
+            data.debug.tooltipElement = el.tagName + '.' + (el.className || '').substring(0, 60);
+            break;
           }
         }
       }
 
-      // Broader search for Spent Today pattern
-      if (!data.spentToday) {
-        const bodyText = document.body.innerText;
-        const spentMatch = bodyText.match(/Spent\s*Today[\s\S]*?(\d{1,2}:\d{2})/i);
-        if (spentMatch) {
-          data.spentToday = spentMatch[1];
+      // ── Extract fields from tooltip text ──
+      const rawSwipesMatch = tooltipText.match(/Raw\s*Swipes?\s*:?\s*(.+?)(?:\n|$)/i);
+      if (rawSwipesMatch) {
+        const rawVal = rawSwipesMatch[1].trim();
+        data.rawSwipes = rawVal;
+        if (rawVal && rawVal.toLowerCase() !== 'none' && rawVal !== '--') {
+          const times = rawVal.split(/[,;]+/).map(t => t.trim()).filter(Boolean);
+          data.swipeTimes = times;
         }
       }
 
-      // --- Scrape "Last Swipe" ---
-      for (const el of allElements) {
-        const text = el.textContent.trim();
-        if (text.includes('Last Swipe')) {
-          const parent = el.closest('div') || el.parentElement;
-          if (parent) {
-            const fullText = parent.textContent;
-            // Match time like "10:30 AM" or "14:30" or "No swipe"
-            const timeMatch = fullText.match(/Last\s*Swipe\s*:\s*([\w\d:.\s]+)/i);
-            if (timeMatch) {
-              data.lastSwipe = timeMatch[1].trim();
-            }
-          }
-        }
-      }
+      const shiftMatch = tooltipText.match(/Shift\s*:?\s*(.+?)(?:\n|$)/i);
+      if (shiftMatch) data.shift = shiftMatch[1].trim();
 
-      // --- Scrape Punch In / Punch Out status ---
-      const punchButtons = document.querySelectorAll('button, [role="button"], a');
-      for (const btn of punchButtons) {
-        const btnText = btn.textContent.trim().toLowerCase();
-        if (btnText.includes('punch in')) {
-          data.punchStatus = 'out'; // Button says "Punch In" means user is currently punched OUT
-        } else if (btnText.includes('punch out')) {
-          data.punchStatus = 'in'; // Button says "Punch Out" means user is currently punched IN
-        }
-      }
+      const actualMatch = tooltipText.match(/Actual\s*:?\s*(.+?)(?:\n|$)/i);
+      if (actualMatch) data.actual = actualMatch[1].trim();
 
-      // Also check for punch status in broader context
-      if (!data.punchStatus) {
-        const bodyText = document.body.innerText;
-        if (/Punch\s*Out/i.test(bodyText)) {
-          data.punchStatus = 'in';
-        } else if (/Punch\s*In/i.test(bodyText)) {
-          data.punchStatus = 'out';
-        }
-      }
+      const hoursMatch = tooltipText.match(/Hours\s*:?\s*(.+?)(?:\n|$)/i);
+      if (hoursMatch) data.hours = hoursMatch[1].trim();
 
-      // --- Try to scrape swipe/attendance log for punch times ---
-      // Look for time entries in attendance section
-      const timeCells = document.querySelectorAll('td, span, div');
-      const punchTimes = [];
-      for (const cell of timeCells) {
-        const text = cell.textContent.trim();
-        // Match standard time formats like "09:30 AM", "09:30", "9:30"
-        if (/^\d{1,2}:\d{2}\s*(AM|PM)?$/i.test(text)) {
-          const parent = cell.closest('tr, .swipe, .punch, .attendance');
-          if (parent) {
-            punchTimes.push(text);
-          }
-        }
-      }
+      const deficitMatch = tooltipText.match(/Deficit\s*:?\s*(.+?)(?:\n|$)/i);
+      if (deficitMatch) data.deficit = deficitMatch[1].trim();
 
-      if (punchTimes.length > 0) {
-        data.punchInTime = punchTimes[0]; // First punch is punch-in
-        if (punchTimes.length > 1) {
-          data.punchOutTime = punchTimes[punchTimes.length - 1]; // Last punch is punch-out
+      data.debug.calendarTooltip = 'Scraped. Raw Swipes: ' + (data.rawSwipes || 'not found');
+
+      // Debug: capture all visible text fragments containing "swipe" or time patterns near calendar
+      data.debug.swipeRelated = [];
+      document.querySelectorAll('*').forEach(el => {
+        const t = (el.innerText || '').trim();
+        if (t.length > 3 && t.length < 200 && /swipe/i.test(t)) {
+          data.debug.swipeRelated.push(el.tagName + ': ' + t.substring(0, 100));
         }
-      }
+      });
+      data.debug.swipeRelated = data.debug.swipeRelated.slice(0, 10);
+
+      // Close the tooltip
+      await closeTooltipInPageContext();
+
+      // Debug: all times found on page
+      data.debug.allTimesFound = [...new Set(document.body.innerText.match(/\d{1,2}:\d{2}(?:\s*(?:AM|PM|am|pm))?/gi) || [])].slice(0, 20);
 
     } catch (err) {
       console.error('[ZingTrack] Scrape error:', err);
+      data.debug.error = err.message;
     }
 
     return data;
   }
 
-  function sendData(data) {
-    // Only send if data changed
+  function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+  }
+
+  // ── Save & Notify ──
+  let lastDataStr = null;
+
+  function saveAndNotify(data) {
+    if (!isExtensionValid()) { cleanup(); return; }
+
     const dataStr = JSON.stringify(data);
-    if (dataStr === lastData) return;
-    lastData = dataStr;
+    if (dataStr === lastDataStr) return;
+    lastDataStr = dataStr;
 
-    chrome.storage.local.set({ portalData: data }, () => {
-      console.log('[ZingTrack] Portal data saved:', data);
-    });
-
-    // Also send message for any open popup
-    chrome.runtime.sendMessage({ type: 'PORTAL_DATA', data }).catch(() => {});
-  }
-
-  function run() {
-    const data = scrapePortalData();
-    sendData(data);
-  }
-
-  // Initial scrape after page settles
-  setTimeout(run, 3000);
-
-  // Periodic scrape
-  setInterval(run, SCRAPE_INTERVAL);
-
-  // Also scrape on visibility change (user switches back to tab)
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-      setTimeout(run, 1000);
+    try {
+      chrome.storage.local.set({ portalData: data }, () => {
+        if (chrome.runtime.lastError) return;
+        console.log('[ZingTrack] Saved:', data);
+      });
+      chrome.runtime.sendMessage({ type: 'PORTAL_DATA', data }).catch(() => {});
+    } catch (e) {
+      cleanup();
     }
-  });
+  }
 
-  // Watch for DOM changes (SPA updates)
-  const observer = new MutationObserver(() => {
-    clearTimeout(observer._debounce);
-    observer._debounce = setTimeout(run, 2000);
-  });
+  async function run() {
+    if (!isExtensionValid()) { cleanup(); return; }
+    const data = await scrapePortalData();
+    saveAndNotify(data);
+  }
 
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    characterData: true
-  });
+  // ── Message listener ──
+  try {
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (msg.type === 'FORCE_SCRAPE') {
+        lastDataStr = null;
+        run();
+        sendResponse({ ok: true });
+      }
+      return true;
+    });
+  } catch (e) {}
 
-  console.log('[ZingTrack] Content script loaded - monitoring Zing portal');
+  // ── Startup ──
+  const t1 = setTimeout(run, 3000);
+  const t2 = setTimeout(run, 8000);
+
+  const interval = setInterval(() => {
+    if (!isExtensionValid()) { cleanup(); return; }
+    run();
+  }, SCRAPE_INTERVAL);
+
+  function onVisChange() {
+    if (!document.hidden && isExtensionValid()) setTimeout(run, 1000);
+  }
+  document.addEventListener('visibilitychange', onVisChange);
+
+  function cleanup() {
+    clearTimeout(t1);
+    clearTimeout(t2);
+    clearInterval(interval);
+    document.removeEventListener('visibilitychange', onVisChange);
+    console.log('[ZingTrack] Content script stopped');
+  }
+
+  console.log('[ZingTrack] Content script loaded on Zing portal');
 })();

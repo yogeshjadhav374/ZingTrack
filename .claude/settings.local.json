@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -L --max-time 30 \"https://support.zinghr.com/support/solutions/folders/11000007937\")",
+      "Bash(curl -s -L --max-time 30 \"https://support.zinghr.com/support/solutions/articles/11000097186-swipe-push-api\")",
+      "Bash(curl -s -L --max-time 30 \"https://support.zinghr.com/support/solutions/articles/11000091533-pushapi-documentation\")"
+    ]
+  }
+}

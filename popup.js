@@ -26,8 +26,18 @@ const els = {
   statusBanner: $('statusBanner'),
   statusText: $('statusText'),
   punchStatus: $('punchStatus'),
+  portalShift: $('portalShift'),
+  portalRawSwipes: $('portalRawSwipes'),
+  portalHours: $('portalHours'),
+  portalDeficit: $('portalDeficit'),
   lastSwipe: $('lastSwipe'),
   spentToday: $('spentToday'),
+  lastSynced: $('lastSynced'),
+  autoSwipesSection: $('autoSwipesSection'),
+  autoSwipeList: $('autoSwipeList'),
+  btnRefreshPortal: $('btnRefreshPortal'),
+  debugSection: $('debugSection'),
+  debugOutput: $('debugOutput'),
   // Progress
   progressTitle: $('progressTitle'),
   dayProgress: $('dayProgress'),
@@ -102,6 +112,37 @@ function bindEvents() {
     allTimestamps[selectedDate] = [];
     await saveTimestamps();
     updateUI();
+  });
+
+  // Refresh from portal
+  els.btnRefreshPortal.addEventListener('click', async () => {
+    els.btnRefreshPortal.textContent = 'Refreshing...';
+    els.btnRefreshPortal.disabled = true;
+    try {
+      // Query all tabs and find the Zing portal one
+      const allTabs = await chrome.tabs.query({});
+      const zingTab = allTabs.find(t => t.url && t.url.includes('zinghr.com'));
+      if (zingTab) {
+        try {
+          await chrome.tabs.sendMessage(zingTab.id, { type: 'FORCE_SCRAPE' });
+        } catch (msgErr) {
+          // Content script may not be injected yet — try reloading the tab
+          console.warn('[ZingTrack] Could not message content script:', msgErr);
+        }
+        // Wait for scrape to save
+        await new Promise(r => setTimeout(r, 2500));
+        const stored = await chrome.storage.local.get(['portalData']);
+        portalData = stored.portalData || null;
+        updateUI();
+      } else {
+        els.statusText.textContent = 'No Zing portal tab found. Open zingnext.zinghr.com first.';
+      }
+    } catch (e) {
+      console.error('Refresh error:', e);
+      els.statusText.textContent = 'Error: ' + e.message;
+    }
+    els.btnRefreshPortal.textContent = 'Refresh from Portal';
+    els.btnRefreshPortal.disabled = false;
   });
 
   // Reset week
@@ -289,11 +330,17 @@ function updateUI() {
     officeMs = calc.officeMs;
     breakMs = calc.breakMs;
   } else {
-    if (portalData && portalData.spentToday && portalData.spentToday !== '--:--') {
-      officeMs = parseHHMM(portalData.spentToday);
-    }
-    breakMs = 0;
     updateAutoUI();
+    // In auto mode, try to use scraped swipe times for calculation
+    const autoTs = getAutoTimestamps();
+    if (autoTs.length > 0) {
+      const calc = calculateFromTimestamps(autoTs, true);
+      officeMs = calc.officeMs;
+      breakMs = calc.breakMs;
+    } else if (portalData && portalData.spentToday && portalData.spentToday !== '--:--') {
+      officeMs = parseHHMM(portalData.spentToday);
+      breakMs = 0;
+    }
   }
 
   // Progress title
@@ -418,23 +465,141 @@ function updateAutoUI() {
     els.statusBanner.className = 'status-banner no-portal';
     els.statusText.textContent = 'Open zingnext.zinghr.com to sync';
     els.punchStatus.textContent = '--';
+    els.portalShift.textContent = '--';
+    els.portalRawSwipes.textContent = '--';
+    els.portalHours.textContent = '--';
+    els.portalDeficit.textContent = '--';
     els.lastSwipe.textContent = '--';
     els.spentToday.textContent = '--:--';
+    els.lastSynced.textContent = 'Never';
+    els.autoSwipesSection.style.display = 'none';
     return;
   }
 
+  // Punch status
   if (portalData.punchStatus === 'in') {
     els.punchStatus.textContent = 'Punched In';
     els.statusBanner.className = 'status-banner punched-in';
-    els.statusText.textContent = 'Punched In - tracking time';
-  } else {
-    els.punchStatus.textContent = portalData.punchStatus === 'out' ? 'Punched Out' : 'Unknown';
+    els.statusText.textContent = 'Punched In - tracking live';
+  } else if (portalData.punchStatus === 'out') {
+    els.punchStatus.textContent = 'Punched Out';
     els.statusBanner.className = 'status-banner';
     els.statusText.textContent = 'Punched out for today';
+  } else {
+    els.punchStatus.textContent = '--';
+    els.statusBanner.className = 'status-banner';
+    els.statusText.textContent = 'Synced with portal';
   }
 
+  els.portalShift.textContent = portalData.shift || '--';
+  els.portalRawSwipes.textContent = portalData.rawSwipes || '--';
+  els.portalHours.textContent = portalData.hours || '--';
+  els.portalDeficit.textContent = portalData.deficit || '--';
   els.lastSwipe.textContent = portalData.lastSwipe || '--';
   els.spentToday.textContent = portalData.spentToday || '--:--';
+
+  // Last synced
+  const syncDate = new Date(portalData.scrapedAt);
+  els.lastSynced.textContent = syncDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  // Show detected swipe times
+  const swipes = portalData.swipeTimes || [];
+  if (swipes.length > 0) {
+    els.autoSwipesSection.style.display = 'block';
+    renderAutoSwipeList(swipes);
+  } else {
+    els.autoSwipesSection.style.display = 'none';
+  }
+
+  // Show debug info
+  if (portalData.debug) {
+    els.debugSection.style.display = 'block';
+    const dbg = portalData.debug;
+    let debugText = '';
+    if (dbg.allTimesFound && dbg.allTimesFound.length > 0) {
+      debugText += 'TIMES FOUND ON PAGE:\n' + dbg.allTimesFound.join(', ') + '\n\n';
+    } else {
+      debugText += 'TIMES FOUND ON PAGE: none\n\n';
+    }
+    if (dbg.textSnippets && dbg.textSnippets.length > 0) {
+      debugText += 'RELEVANT TEXT SNIPPETS:\n' + dbg.textSnippets.join('\n') + '\n';
+    } else {
+      debugText += 'RELEVANT TEXT SNIPPETS: none\n';
+    }
+    debugText += '\nRAW DATA:\n';
+    debugText += 'spentToday: ' + (portalData.spentToday || 'null') + '\n';
+    debugText += 'lastSwipe: ' + (portalData.lastSwipe || 'null') + '\n';
+    debugText += 'punchStatus: ' + (portalData.punchStatus || 'null') + '\n';
+    debugText += 'swipeTimes: ' + JSON.stringify(portalData.swipeTimes || []) + '\n';
+    els.debugOutput.textContent = debugText;
+  } else {
+    els.debugSection.style.display = 'none';
+  }
+}
+
+// Parse portal swipe time strings into epoch ms for today
+function getAutoTimestamps() {
+  if (!portalData || !portalData.swipeTimes || portalData.swipeTimes.length === 0) return [];
+
+  const result = [];
+  const today = new Date();
+
+  for (const timeStr of portalData.swipeTimes) {
+    const ms = parseSwipeTimeStr(timeStr, today);
+    if (ms) result.push(ms);
+  }
+
+  result.sort((a, b) => a - b);
+  return result;
+}
+
+// Parse various time formats: "10:30 AM", "14:30", "10:30", "2026-03-24 10:30:00"
+function parseSwipeTimeStr(str, refDate) {
+  str = String(str).trim();
+  if (!str || str === '--' || str === '--:--') return null;
+
+  // Try full datetime "YYYY-MM-DD HH:MM:SS"
+  const dtMatch = str.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (dtMatch) {
+    return new Date(
+      parseInt(dtMatch[1]), parseInt(dtMatch[2]) - 1, parseInt(dtMatch[3]),
+      parseInt(dtMatch[4]), parseInt(dtMatch[5]), parseInt(dtMatch[6] || 0)
+    ).getTime();
+  }
+
+  // Try "HH:MM AM/PM" or "HH:MM"
+  const timeMatch = str.match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?$/);
+  if (timeMatch) {
+    let h = parseInt(timeMatch[1], 10);
+    const m = parseInt(timeMatch[2], 10);
+    const ampm = (timeMatch[3] || '').toLowerCase();
+
+    if (ampm === 'am' && h === 12) h = 0;
+    if (ampm === 'pm' && h !== 12) h += 12;
+
+    const d = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), h, m, 0, 0);
+    return d.getTime();
+  }
+
+  return null;
+}
+
+function renderAutoSwipeList(swipes) {
+  els.autoSwipeList.innerHTML = '';
+
+  swipes.forEach((timeStr, i) => {
+    const isIn = i % 2 === 0;
+    const type = isIn ? 'IN' : 'OUT';
+
+    const div = document.createElement('div');
+    div.className = 'ts-item';
+    div.innerHTML = `
+      <span class="ts-index">${i + 1}</span>
+      <span class="ts-time">${timeStr}</span>
+      <span class="ts-type ${isIn ? 'in' : 'out'}">${type}</span>
+    `;
+    els.autoSwipeList.appendChild(div);
+  });
 }
 
 function calculateCarryOver(dayIndex) {

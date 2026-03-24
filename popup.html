@@ -52,7 +52,7 @@
     <!-- Auto Mode -->
     <div id="autoMode" style="display:none;">
       <div class="card">
-        <div class="card-title">Zing Portal</div>
+        <div class="card-title">Zing Portal (Auto)</div>
         <div class="status-banner no-portal" id="statusBanner">
           <span id="statusText">Open zingnext.zinghr.com to sync</span>
         </div>
@@ -62,13 +62,46 @@
             <strong id="punchStatus">--</strong>
           </div>
           <div class="portal-row">
+            <span>Shift</span>
+            <strong id="portalShift">--</strong>
+          </div>
+          <div class="portal-row">
+            <span>Raw Swipes</span>
+            <strong id="portalRawSwipes">--</strong>
+          </div>
+          <div class="portal-row">
+            <span>Hours</span>
+            <strong id="portalHours">--</strong>
+          </div>
+          <div class="portal-row">
+            <span>Deficit</span>
+            <strong id="portalDeficit">--</strong>
+          </div>
+          <div class="portal-row">
+            <span>Spent Today</span>
+            <strong id="spentToday">--:--</strong>
+          </div>
+          <div class="portal-row">
             <span>Last Swipe</span>
             <strong id="lastSwipe">--</strong>
           </div>
           <div class="portal-row">
-            <span>Spent Today (Portal)</span>
-            <strong id="spentToday">--:--</strong>
+            <span>Last Synced</span>
+            <strong id="lastSynced">Never</strong>
           </div>
+        </div>
+        <div class="auto-swipes-section" id="autoSwipesSection" style="display:none;">
+          <div class="card-title" style="margin-top:10px;">Detected Swipe Times</div>
+          <div class="timestamp-list" id="autoSwipeList"></div>
+        </div>
+        <div class="auto-actions">
+          <button class="btn-add" id="btnRefreshPortal" style="width:100%;margin-top:10px;">Refresh from Portal</button>
+          <div class="auto-help">Keep the Zing portal tab open for auto-sync.</div>
+        </div>
+        <!-- Debug info to identify what scraper finds -->
+        <div class="debug-section" id="debugSection" style="display:none;">
+          <div class="card-title" style="margin-top:10px;">Scraper Debug Info</div>
+          <pre class="debug-output" id="debugOutput"></pre>
         </div>
       </div>
     </div>
