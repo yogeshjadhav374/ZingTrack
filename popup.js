@@ -27,17 +27,13 @@ const els = {
   statusText: $('statusText'),
   punchStatus: $('punchStatus'),
   portalShift: $('portalShift'),
-  portalRawSwipes: $('portalRawSwipes'),
   portalHours: $('portalHours'),
   portalDeficit: $('portalDeficit'),
-  lastSwipe: $('lastSwipe'),
-  spentToday: $('spentToday'),
+  portalAttendance: $('portalAttendance'),
   lastSynced: $('lastSynced'),
-  autoSwipesSection: $('autoSwipesSection'),
   autoSwipeList: $('autoSwipeList'),
   btnRefreshPortal: $('btnRefreshPortal'),
-  debugSection: $('debugSection'),
-  debugOutput: $('debugOutput'),
+  btnClearAutoDay: $('btnClearAutoDay'),
   // Progress
   progressTitle: $('progressTitle'),
   dayProgress: $('dayProgress'),
@@ -63,9 +59,11 @@ const els = {
 // State
 let mode = 'manual';
 let selectedDate = getTodayStr(); // YYYY-MM-DD of the day being viewed/edited
-let allTimestamps = {};           // { "2026-03-24": [ts1, ts2, ...], ... }
+let allTimestamps = {};           // Manual mode: { "2026-03-24": [ts1, ts2, ...], ... }
+let autoTimestamps = {};          // Auto mode: { "2026-03-24": [ts1, ts2, ...], ... }
 let weekData = null;
 let portalData = null;
+let timeCardData = null;  // All days from GetTimeCard API
 
 // ─── Init ───
 document.addEventListener('DOMContentLoaded', async () => {
@@ -76,10 +74,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function loadAll() {
-  const stored = await chrome.storage.local.get(['mode', 'allTimestamps', 'weekData', 'portalData']);
+  const stored = await chrome.storage.local.get(['mode', 'allTimestamps', 'autoTimestamps', 'weekData', 'portalData', 'timeCardData']);
   mode = stored.mode || 'manual';
   portalData = stored.portalData || null;
+  timeCardData = stored.timeCardData || null;
   allTimestamps = stored.allTimestamps || {};
+  autoTimestamps = stored.autoTimestamps || {};
 
   // Load week data
   weekData = stored.weekData || getEmptyWeekData();
@@ -114,50 +114,87 @@ function bindEvents() {
     updateUI();
   });
 
-  // Refresh from portal
+  // Fetch from portal — merges swipes into allTimestamps with dedup
   els.btnRefreshPortal.addEventListener('click', async () => {
-    els.btnRefreshPortal.textContent = 'Refreshing...';
+    els.btnRefreshPortal.textContent = 'Fetching...';
     els.btnRefreshPortal.disabled = true;
     try {
-      // Query all tabs and find the Zing portal one
-      const allTabs = await chrome.tabs.query({});
-      const zingTab = allTabs.find(t => t.url && t.url.includes('zinghr.com'));
-      if (zingTab) {
-        try {
-          await chrome.tabs.sendMessage(zingTab.id, { type: 'FORCE_SCRAPE' });
-        } catch (msgErr) {
-          // Content script may not be injected yet — try reloading the tab
-          console.warn('[ZingTrack] Could not message content script:', msgErr);
-        }
-        // Wait for scrape to save
-        await new Promise(r => setTimeout(r, 2500));
-        const stored = await chrome.storage.local.get(['portalData']);
+      const response = await chrome.runtime.sendMessage({ type: 'FETCH_TIMECARD' });
+      if (response && response.ok) {
+        const stored = await chrome.storage.local.get(['portalData', 'timeCardData']);
         portalData = stored.portalData || null;
+        timeCardData = stored.timeCardData || null;
+
+        // Merge fetched swipe times into autoTimestamps (dedup)
+        if (timeCardData) {
+          let changed = false;
+          for (const [dateStr, dayData] of Object.entries(timeCardData)) {
+            if (!dayData.swipeTimes || dayData.swipeTimes.length === 0) continue;
+            const refDate = new Date(dateStr + 'T00:00:00');
+            const fetchedMs = dayData.swipeTimes
+              .map(s => parseSwipeTimeStr(s, refDate))
+              .filter(Boolean);
+            if (fetchedMs.length === 0) continue;
+
+            const existing = autoTimestamps[dateStr] || [];
+            // Count-based dedup: allow duplicates if portal has more occurrences
+            // than what's already stored (e.g. 17:38 appears twice = OUT then IN)
+            const usedExisting = new Array(existing.length).fill(false);
+            const toAdd = [];
+            for (const ts of fetchedMs) {
+              // Find an unmatched existing entry within 1 minute
+              const matchIdx = existing.findIndex((e, i) => !usedExisting[i] && Math.abs(e - ts) < 60000);
+              if (matchIdx !== -1) {
+                usedExisting[matchIdx] = true; // pair it, don't add again
+              } else {
+                toAdd.push(ts);
+              }
+            }
+            if (toAdd.length > 0) {
+              const merged = [...existing, ...toAdd].sort((a, b) => a - b);
+              autoTimestamps[dateStr] = merged;
+              changed = true;
+            }
+          }
+          if (changed) await saveTimestamps();
+        }
+
         updateUI();
+        els.statusText.textContent = 'Synced successfully!';
       } else {
-        els.statusText.textContent = 'No Zing portal tab found. Open zingnext.zinghr.com first.';
+        els.statusText.textContent = response?.error || 'Failed to fetch data';
       }
     } catch (e) {
       console.error('Refresh error:', e);
       els.statusText.textContent = 'Error: ' + e.message;
     }
-    els.btnRefreshPortal.textContent = 'Refresh from Portal';
+    els.btnRefreshPortal.textContent = 'Fetch from Portal';
     els.btnRefreshPortal.disabled = false;
+  });
+
+  // Clear day in auto mode
+  els.btnClearAutoDay.addEventListener('click', async () => {
+    const label = isToday(selectedDate) ? 'today' : formatDateShort(selectedDate);
+    if (!confirm(`Clear all timestamps for ${label}?`)) return;
+    autoTimestamps[selectedDate] = [];
+    await saveTimestamps();
+    updateUI();
   });
 
   // Reset week
   els.btnResetWeek.addEventListener('click', async () => {
     if (!confirm('Reset entire week data?')) return;
     weekData = getEmptyWeekData();
-    // Clear all timestamps for this week
+    // Clear all timestamps for this week (both manual and auto)
     const monday = getMonday(new Date());
     for (let i = 0; i < 5; i++) {
       const d = new Date(monday);
       d.setDate(d.getDate() + i);
       const key = dateToStr(d);
       delete allTimestamps[key];
+      delete autoTimestamps[key];
     }
-    await chrome.storage.local.set({ weekData, allTimestamps });
+    await chrome.storage.local.set({ weekData, allTimestamps, autoTimestamps });
     updateUI();
   });
 
@@ -266,14 +303,25 @@ async function addTimestamp() {
 }
 
 async function removeTimestamp(index) {
-  if (!allTimestamps[selectedDate]) return;
-  allTimestamps[selectedDate].splice(index, 1);
+  if (mode === 'auto') {
+    if (!autoTimestamps[selectedDate]) return;
+    autoTimestamps[selectedDate].splice(index, 1);
+  } else {
+    if (!allTimestamps[selectedDate]) return;
+    allTimestamps[selectedDate].splice(index, 1);
+  }
   await saveTimestamps();
   updateUI();
 }
 
+// Get timestamps for selected date based on active mode
+function getActiveTimestamps(dateStr) {
+  if (mode === 'auto') return autoTimestamps[dateStr] || [];
+  return allTimestamps[dateStr] || [];
+}
+
 async function saveTimestamps() {
-  await chrome.storage.local.set({ allTimestamps });
+  await chrome.storage.local.set({ allTimestamps, autoTimestamps });
 }
 
 // ─── Calculations ───
@@ -318,30 +366,24 @@ function updateUI() {
   // Day selector
   updateDaySelector();
 
-  // Get timestamps for selected day
-  const selectedTs = allTimestamps[selectedDate] || [];
+  // Get timestamps for selected day based on active mode
+  const selectedTs = getActiveTimestamps(selectedDate);
   const viewingToday = isToday(selectedDate);
 
   let officeMs = 0, breakMs = 0;
 
   if (mode === 'manual') {
     renderTimestampList(selectedTs, viewingToday);
-    const calc = calculateFromTimestamps(selectedTs, viewingToday);
-    officeMs = calc.officeMs;
-    breakMs = calc.breakMs;
   } else {
     updateAutoUI();
-    // In auto mode, try to use scraped swipe times for calculation
-    const autoTs = getAutoTimestamps();
-    if (autoTs.length > 0) {
-      const calc = calculateFromTimestamps(autoTs, true);
-      officeMs = calc.officeMs;
-      breakMs = calc.breakMs;
-    } else if (portalData && portalData.spentToday && portalData.spentToday !== '--:--') {
-      officeMs = parseHHMM(portalData.spentToday);
-      breakMs = 0;
-    }
+    // In auto mode, render the same timestamp list with delete buttons
+    renderTimestampList(selectedTs, viewingToday);
   }
+
+  // Both modes use allTimestamps for calculation
+  const calc = calculateFromTimestamps(selectedTs, viewingToday);
+  officeMs = calc.officeMs;
+  breakMs = calc.breakMs;
 
   // Progress title
   els.progressTitle.textContent = viewingToday ? "Today's Progress" : `${formatDayName(selectedDate)} Progress`;
@@ -412,12 +454,17 @@ function updateDaySelector() {
 }
 
 function renderTimestampList(timestamps, useNowForOpen) {
-  els.timestampList.innerHTML = '';
+  // Render into the correct container based on mode
+  const container = mode === 'auto' ? els.autoSwipeList : els.timestampList;
+  container.innerHTML = '';
+
   if (!timestamps || timestamps.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'ts-empty';
-    empty.textContent = 'No timestamps yet. Add your first swipe time above.';
-    els.timestampList.appendChild(empty);
+    empty.textContent = mode === 'auto'
+      ? 'No swipes yet. Click "Fetch from Portal" to load.'
+      : 'No timestamps yet. Add your first swipe time above.';
+    container.appendChild(empty);
     return;
   }
 
@@ -450,10 +497,10 @@ function renderTimestampList(timestamps, useNowForOpen) {
       <span class="ts-duration">${durationStr}</span>
       <button class="ts-remove" data-index="${i}" title="Remove">&times;</button>
     `;
-    els.timestampList.appendChild(div);
+    container.appendChild(div);
   });
 
-  els.timestampList.querySelectorAll('.ts-remove').forEach(btn => {
+  container.querySelectorAll('.ts-remove').forEach(btn => {
     btn.addEventListener('click', () => {
       removeTimestamp(parseInt(btn.dataset.index, 10));
     });
@@ -461,96 +508,53 @@ function renderTimestampList(timestamps, useNowForOpen) {
 }
 
 function updateAutoUI() {
-  if (!portalData || !portalData.scrapedAt) {
+  const dayData = getDayDataForSelectedDate();
+  const data = dayData || portalData || {};
+  const selectedTs = autoTimestamps[selectedDate] || [];
+
+  if (!dayData && !portalData && selectedTs.length === 0) {
     els.statusBanner.className = 'status-banner no-portal';
-    els.statusText.textContent = 'Open zingnext.zinghr.com to sync';
+    els.statusText.textContent = 'Click "Fetch from Portal" to load data';
     els.punchStatus.textContent = '--';
     els.portalShift.textContent = '--';
-    els.portalRawSwipes.textContent = '--';
     els.portalHours.textContent = '--';
     els.portalDeficit.textContent = '--';
-    els.lastSwipe.textContent = '--';
-    els.spentToday.textContent = '--:--';
+    els.portalAttendance.textContent = '--';
     els.lastSynced.textContent = 'Never';
-    els.autoSwipesSection.style.display = 'none';
     return;
   }
 
-  // Punch status
-  if (portalData.punchStatus === 'in') {
-    els.punchStatus.textContent = 'Punched In';
-    els.statusBanner.className = 'status-banner punched-in';
-    els.statusText.textContent = 'Punched In - tracking live';
-  } else if (portalData.punchStatus === 'out') {
-    els.punchStatus.textContent = 'Punched Out';
-    els.statusBanner.className = 'status-banner';
-    els.statusText.textContent = 'Punched out for today';
+  // Punch status from timestamps count
+  if (isToday(selectedDate)) {
+    const isIn = selectedTs.length % 2 === 1;
+    els.punchStatus.textContent = isIn ? 'Punched In' : 'Punched Out';
+    els.statusBanner.className = isIn ? 'status-banner punched-in' : 'status-banner';
+    els.statusText.textContent = isIn ? 'Punched In - tracking live' : `Viewing ${formatDayName(selectedDate)}`;
   } else {
-    els.punchStatus.textContent = '--';
+    els.punchStatus.textContent = data.attendanceStatus || '--';
     els.statusBanner.className = 'status-banner';
-    els.statusText.textContent = 'Synced with portal';
+    els.statusText.textContent = `Viewing ${formatDayName(selectedDate)}`;
   }
 
-  els.portalShift.textContent = portalData.shift || '--';
-  els.portalRawSwipes.textContent = portalData.rawSwipes || '--';
-  els.portalHours.textContent = portalData.hours || '--';
-  els.portalDeficit.textContent = portalData.deficit || '--';
-  els.lastSwipe.textContent = portalData.lastSwipe || '--';
-  els.spentToday.textContent = portalData.spentToday || '--:--';
+  els.portalShift.textContent = data.shift || '--';
+  els.portalHours.textContent = data.workingHours || data.hours || '--';
+  els.portalDeficit.textContent = data.deficit || '--';
+  els.portalAttendance.textContent = data.attendanceStatus || '--';
 
   // Last synced
-  const syncDate = new Date(portalData.scrapedAt);
-  els.lastSynced.textContent = syncDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-  // Show detected swipe times
-  const swipes = portalData.swipeTimes || [];
-  if (swipes.length > 0) {
-    els.autoSwipesSection.style.display = 'block';
-    renderAutoSwipeList(swipes);
+  const scrapedAt = data.scrapedAt || (portalData && portalData.scrapedAt);
+  if (scrapedAt) {
+    const syncDate = new Date(scrapedAt);
+    els.lastSynced.textContent = syncDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   } else {
-    els.autoSwipesSection.style.display = 'none';
-  }
-
-  // Show debug info
-  if (portalData.debug) {
-    els.debugSection.style.display = 'block';
-    const dbg = portalData.debug;
-    let debugText = '';
-    if (dbg.allTimesFound && dbg.allTimesFound.length > 0) {
-      debugText += 'TIMES FOUND ON PAGE:\n' + dbg.allTimesFound.join(', ') + '\n\n';
-    } else {
-      debugText += 'TIMES FOUND ON PAGE: none\n\n';
-    }
-    if (dbg.textSnippets && dbg.textSnippets.length > 0) {
-      debugText += 'RELEVANT TEXT SNIPPETS:\n' + dbg.textSnippets.join('\n') + '\n';
-    } else {
-      debugText += 'RELEVANT TEXT SNIPPETS: none\n';
-    }
-    debugText += '\nRAW DATA:\n';
-    debugText += 'spentToday: ' + (portalData.spentToday || 'null') + '\n';
-    debugText += 'lastSwipe: ' + (portalData.lastSwipe || 'null') + '\n';
-    debugText += 'punchStatus: ' + (portalData.punchStatus || 'null') + '\n';
-    debugText += 'swipeTimes: ' + JSON.stringify(portalData.swipeTimes || []) + '\n';
-    els.debugOutput.textContent = debugText;
-  } else {
-    els.debugSection.style.display = 'none';
+    els.lastSynced.textContent = 'Never';
   }
 }
 
-// Parse portal swipe time strings into epoch ms for today
-function getAutoTimestamps() {
-  if (!portalData || !portalData.swipeTimes || portalData.swipeTimes.length === 0) return [];
-
-  const result = [];
-  const today = new Date();
-
-  for (const timeStr of portalData.swipeTimes) {
-    const ms = parseSwipeTimeStr(timeStr, today);
-    if (ms) result.push(ms);
-  }
-
-  result.sort((a, b) => a - b);
-  return result;
+// Get day data for the currently selected date from the timeCardData cache
+function getDayDataForSelectedDate() {
+  if (!timeCardData) return null;
+  return timeCardData[selectedDate] || null;
 }
 
 // Parse various time formats: "10:30 AM", "14:30", "10:30", "2026-03-24 10:30:00"
@@ -584,24 +588,6 @@ function parseSwipeTimeStr(str, refDate) {
   return null;
 }
 
-function renderAutoSwipeList(swipes) {
-  els.autoSwipeList.innerHTML = '';
-
-  swipes.forEach((timeStr, i) => {
-    const isIn = i % 2 === 0;
-    const type = isIn ? 'IN' : 'OUT';
-
-    const div = document.createElement('div');
-    div.className = 'ts-item';
-    div.innerHTML = `
-      <span class="ts-index">${i + 1}</span>
-      <span class="ts-time">${timeStr}</span>
-      <span class="ts-type ${isIn ? 'in' : 'out'}">${type}</span>
-    `;
-    els.autoSwipeList.appendChild(div);
-  });
-}
-
 function calculateCarryOver(dayIndex) {
   let carry = 0;
   const monday = getMonday(new Date());
@@ -609,7 +595,7 @@ function calculateCarryOver(dayIndex) {
     const d = new Date(monday);
     d.setDate(d.getDate() + i);
     const dateStr = dateToStr(d);
-    const ts = allTimestamps[dateStr] || [];
+    const ts = getActiveTimestamps(dateStr);
     if (ts.length > 0) {
       const calc = calculateFromTimestamps(ts, false);
       const unused = Math.max(0, BREAK_ALLOWANCE_MS - calc.breakMs);
@@ -628,7 +614,7 @@ function updateWeekGrid(selectedDateStr) {
     const d = new Date(monday);
     d.setDate(d.getDate() + i);
     const dateStr = dateToStr(d);
-    const ts = allTimestamps[dateStr] || [];
+    const ts = getActiveTimestamps(dateStr);
     const isViewingToday = (dateStr === todayStr);
     const calc = calculateFromTimestamps(ts, isViewingToday);
     const total = calc.officeMs + calc.breakMs;
@@ -663,7 +649,7 @@ function updateWeekTotals() {
     const d = new Date(monday);
     d.setDate(d.getDate() + i);
     const dateStr = dateToStr(d);
-    const ts = allTimestamps[dateStr] || [];
+    const ts = getActiveTimestamps(dateStr);
     if (ts.length === 0) continue;
     const calc = calculateFromTimestamps(ts, dateStr === todayStr);
     totalOffice += calc.officeMs + calc.breakMs;

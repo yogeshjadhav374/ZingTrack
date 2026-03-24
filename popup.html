@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ZingTrack</title>
   <link rel="stylesheet" href="popup.css">
 </head>
+
 <body>
   <div class="container">
     <!-- Header -->
@@ -66,10 +68,6 @@
             <strong id="portalShift">--</strong>
           </div>
           <div class="portal-row">
-            <span>Raw Swipes</span>
-            <strong id="portalRawSwipes">--</strong>
-          </div>
-          <div class="portal-row">
             <span>Hours</span>
             <strong id="portalHours">--</strong>
           </div>
@@ -78,30 +76,24 @@
             <strong id="portalDeficit">--</strong>
           </div>
           <div class="portal-row">
-            <span>Spent Today</span>
-            <strong id="spentToday">--:--</strong>
-          </div>
-          <div class="portal-row">
-            <span>Last Swipe</span>
-            <strong id="lastSwipe">--</strong>
+            <span>Status</span>
+            <strong id="portalAttendance">--</strong>
           </div>
           <div class="portal-row">
             <span>Last Synced</span>
             <strong id="lastSynced">Never</strong>
           </div>
         </div>
-        <div class="auto-swipes-section" id="autoSwipesSection" style="display:none;">
-          <div class="card-title" style="margin-top:10px;">Detected Swipe Times</div>
+        <div class="auto-swipes-section">
+          <div class="card-title" style="margin-top:10px;">Swipe Times</div>
           <div class="timestamp-list" id="autoSwipeList"></div>
         </div>
         <div class="auto-actions">
-          <button class="btn-add" id="btnRefreshPortal" style="width:100%;margin-top:10px;">Refresh from Portal</button>
-          <div class="auto-help">Keep the Zing portal tab open for auto-sync.</div>
+          <button class="btn-add" id="btnRefreshPortal" style="width:100%;margin-top:10px;">Fetch from Portal</button>
+          <div class="auto-help">Open the TimeCard page on portal.zinghr.com, then click Fetch.</div>
         </div>
-        <!-- Debug info to identify what scraper finds -->
-        <div class="debug-section" id="debugSection" style="display:none;">
-          <div class="card-title" style="margin-top:10px;">Scraper Debug Info</div>
-          <pre class="debug-output" id="debugOutput"></pre>
+        <div class="timestamp-actions">
+          <button class="btn-link danger" id="btnClearAutoDay">Clear Day</button>
         </div>
       </div>
     </div>
@@ -196,4 +188,5 @@
 
   <script src="popup.js"></script>
 </body>
+
 </html>
