@@ -402,9 +402,12 @@ function updateUI() {
   els.dayProgress.classList.toggle('complete', progress >= 100);
 
   // Break
+  // Any total presence beyond the 9h target extends the break budget.
+  // e.g. if you're in office 9h20m total, you get 30+20 = 50min break allowance.
+  const extraPresenceMs = Math.max(0, totalPresenceMs - WORK_MS);
   const selectedDayIndex = getDayIndex(selectedDate);
   const carryOverMs = calculateCarryOver(selectedDayIndex);
-  const totalAvailableMs = BREAK_ALLOWANCE_MS + carryOverMs;
+  const totalAvailableMs = BREAK_ALLOWANCE_MS + extraPresenceMs + carryOverMs;
   const breakRemainingMs = Math.max(0, totalAvailableMs - breakMs);
   const isOver = breakMs > totalAvailableMs;
 
@@ -598,7 +601,10 @@ function calculateCarryOver(dayIndex) {
     const ts = getActiveTimestamps(dateStr);
     if (ts.length > 0) {
       const calc = calculateFromTimestamps(ts, false);
-      const unused = Math.max(0, BREAK_ALLOWANCE_MS - calc.breakMs);
+      const presence = calc.officeMs + calc.breakMs;
+      const extra = Math.max(0, presence - WORK_MS);
+      const effectiveAllowance = BREAK_ALLOWANCE_MS + extra;
+      const unused = Math.max(0, effectiveAllowance - calc.breakMs);
       carry += unused;
     }
   }
@@ -645,18 +651,26 @@ function updateWeekTotals() {
   let totalOffice = 0;
   let totalBreak = 0;
 
+  // Base budget is always the full 5-day week (150m).
+  // Extra presence beyond 9h on any day adds to the pool on top.
+  let totalWeekBreakBudget = 5 * BREAK_ALLOWANCE_MS;
+
   for (let i = 0; i < 5; i++) {
     const d = new Date(monday);
     d.setDate(d.getDate() + i);
     const dateStr = dateToStr(d);
+
     const ts = getActiveTimestamps(dateStr);
     if (ts.length === 0) continue;
+
     const calc = calculateFromTimestamps(ts, dateStr === todayStr);
-    totalOffice += calc.officeMs + calc.breakMs;
+    const presence = calc.officeMs + calc.breakMs;
+    totalOffice += presence;
     totalBreak += calc.breakMs;
+    // Any time beyond 9h on a given day extends the weekly break pool
+    totalWeekBreakBudget += Math.max(0, presence - WORK_MS);
   }
 
-  const totalWeekBreakBudget = 5 * BREAK_ALLOWANCE_MS;
   const breakLeft = Math.max(0, totalWeekBreakBudget - totalBreak);
 
   els.weekOffice.textContent = fmtTime(totalOffice);
