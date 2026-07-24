@@ -25,6 +25,20 @@ body {
   margin-bottom: 14px;
 }
 
+.header.centered {
+  justify-content: center;
+  margin-bottom: 6px;
+}
+
+/* Current date & day */
+.date-display {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 14px;
+}
+
 .header h1 {
   font-size: 20px;
   font-weight: 800;
@@ -418,6 +432,63 @@ body {
   font-size: 15px;
   font-weight: 800;
   color: #1e293b;
+}
+
+/* Average Work Time */
+.avg-help {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.avg-day-selector {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.avg-day-chip {
+  flex: 1;
+  padding: 8px 0;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.5);
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.avg-day-chip:hover:not(.active) {
+  background: rgba(99, 102, 241, 0.06);
+  color: #475569;
+}
+
+.avg-day-chip.active {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+}
+
+.avg-result {
+  text-align: center;
+  padding: 6px 0 2px;
+}
+
+.avg-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: #1e293b;
+  letter-spacing: -0.5px;
+}
+
+.avg-sub {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
 }
 
 /* Break Tracker */

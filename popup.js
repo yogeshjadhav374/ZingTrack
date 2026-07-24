@@ -2,27 +2,12 @@
 const WORK_MS = 9 * 60 * 60 * 1000;
 const BREAK_ALLOWANCE_MS = 30 * 60 * 1000;
 const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 42;
 
 // DOM refs
 const $ = (id) => document.getElementById(id);
 const els = {
-  dayBadge: $('dayBadge'),
-  btnManual: $('btnManual'),
-  btnAuto: $('btnAuto'),
-  manualMode: $('manualMode'),
-  autoMode: $('autoMode'),
-  // Day selector
-  btnPrevDay: $('btnPrevDay'),
-  btnNextDay: $('btnNextDay'),
-  selectedDayName: $('selectedDayName'),
-  selectedDayDate: $('selectedDayDate'),
-  // Manual mode
-  timeInput: $('timeInput'),
-  btnAddTime: $('btnAddTime'),
-  timestampList: $('timestampList'),
-  btnClearDay: $('btnClearDay'),
-  // Auto mode
+  currentDateTime: $('currentDateTime'),
+  // Auto (Portal) mode
   statusBanner: $('statusBanner'),
   statusText: $('statusText'),
   punchStatus: $('punchStatus'),
@@ -40,14 +25,12 @@ const els = {
   progressPercent: $('progressPercent'),
   officeTime: $('officeTime'),
   workTime: $('workTime'),
+  breakTimeStat: $('breakTimeStat'),
   remainingTime: $('remainingTime'),
-  // Break
-  breakUsed: $('breakUsed'),
-  breakArc: $('breakArc'),
-  carriedOver: $('carriedOver'),
-  totalBreakAvailable: $('totalBreakAvailable'),
-  breakRemaining: $('breakRemaining'),
-  breakNote: $('breakNote'),
+  // Average Work Time
+  avgDaySelector: $('avgDaySelector'),
+  avgWorkValue: $('avgWorkValue'),
+  avgWorkSub: $('avgWorkSub'),
   // Week
   weekGrid: $('weekGrid'),
   weekOffice: $('weekOffice'),
@@ -57,13 +40,14 @@ const els = {
 };
 
 // State
-let mode = 'manual';
+let mode = 'auto'; // Auto (Portal) only — manual mode removed
 let selectedDate = getTodayStr(); // YYYY-MM-DD of the day being viewed/edited
 let allTimestamps = {};           // Manual mode: { "2026-03-24": [ts1, ts2, ...], ... }
 let autoTimestamps = {};          // Auto mode: { "2026-03-24": [ts1, ts2, ...], ... }
 let weekData = null;
 let portalData = null;
 let timeCardData = null;  // All days from GetTimeCard API
+let avgSelectedDays = new Set(); // weekday indices (0=Mon..4=Fri) for Average Work Time
 
 // ─── Init ───
 document.addEventListener('DOMContentLoaded', async () => {
@@ -74,8 +58,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function loadAll() {
-  const stored = await chrome.storage.local.get(['mode', 'allTimestamps', 'autoTimestamps', 'weekData', 'portalData', 'timeCardData']);
-  mode = stored.mode || 'manual';
+  const stored = await chrome.storage.local.get(['allTimestamps', 'autoTimestamps', 'weekData', 'portalData', 'timeCardData']);
+  mode = 'auto';
   portalData = stored.portalData || null;
   timeCardData = stored.timeCardData || null;
   allTimestamps = stored.allTimestamps || {};
@@ -91,29 +75,6 @@ async function loadAll() {
 }
 
 function bindEvents() {
-  // Mode toggle
-  els.btnManual.addEventListener('click', () => switchMode('manual'));
-  els.btnAuto.addEventListener('click', () => switchMode('auto'));
-
-  // Day navigation
-  els.btnPrevDay.addEventListener('click', () => navigateDay(-1));
-  els.btnNextDay.addEventListener('click', () => navigateDay(1));
-
-  // Add timestamp
-  els.btnAddTime.addEventListener('click', () => addTimestamp());
-  els.timeInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') addTimestamp();
-  });
-
-  // Clear day
-  els.btnClearDay.addEventListener('click', async () => {
-    const label = isToday(selectedDate) ? 'today' : formatDateShort(selectedDate);
-    if (!confirm(`Clear all timestamps for ${label}?`)) return;
-    allTimestamps[selectedDate] = [];
-    await saveTimestamps();
-    updateUI();
-  });
-
   // Fetch from portal — merges swipes into allTimestamps with dedup
   els.btnRefreshPortal.addEventListener('click', async () => {
     els.btnRefreshPortal.textContent = 'Fetching...';
@@ -198,6 +159,17 @@ function bindEvents() {
     updateUI();
   });
 
+  // Average Work Time — toggle weekday chips (multi-select)
+  els.avgDaySelector.addEventListener('click', (e) => {
+    const chip = e.target.closest('.avg-day-chip');
+    if (!chip) return;
+    const idx = parseInt(chip.dataset.index, 10);
+    if (isNaN(idx)) return;
+    if (avgSelectedDays.has(idx)) avgSelectedDays.delete(idx);
+    else avgSelectedDays.add(idx);
+    updateAvgWorkTime();
+  });
+
   // Week day click to select
   els.weekGrid.addEventListener('click', (e) => {
     const dayEl = e.target.closest('.week-day');
@@ -216,108 +188,18 @@ function bindEvents() {
   });
 }
 
-// ─── Day Navigation ───
-function navigateDay(delta) {
-  const current = new Date(selectedDate + 'T00:00:00');
-  current.setDate(current.getDate() + delta);
-  const newDateStr = dateToStr(current);
-
-  // Can't go into the future
-  if (newDateStr > getTodayStr()) return;
-
-  // Only navigate within the current week (Mon-Fri)
-  const monday = getMonday(new Date());
-  const mondayStr = dateToStr(monday);
-  if (newDateStr < mondayStr) return;
-
-  selectedDate = newDateStr;
-  updateUI();
-}
-
-async function switchMode(newMode) {
-  mode = newMode;
-  await chrome.storage.local.set({ mode });
-  updateUI();
-}
-
-// ─── Timestamp Parsing ───
-function parseTimeInput(str) {
-  str = str.trim().toLowerCase();
-  if (!str) return null;
-
-  const match = str.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/);
-  if (!match) return null;
-
-  let hours = parseInt(match[1], 10);
-  const minutes = parseInt(match[2], 10);
-  const ampm = match[3];
-
-  if (minutes < 0 || minutes > 59) return null;
-
-  if (ampm) {
-    if (hours < 1 || hours > 12) return null;
-    if (ampm === 'am' && hours === 12) hours = 0;
-    if (ampm === 'pm' && hours !== 12) hours += 12;
-  } else {
-    if (hours < 0 || hours > 23) return null;
-  }
-
-  // Create a Date for the SELECTED day with the given time
-  const d = new Date(selectedDate + 'T00:00:00');
-  d.setHours(hours, minutes, 0, 0);
-  return d.getTime();
-}
-
-async function addTimestamp() {
-  const raw = els.timeInput.value.trim();
-  if (!raw) return;
-
-  // Split by comma, semicolon, or pipe to accept multiple timestamps at once
-  const parts = raw.split(/[,;|]+/).map(s => s.trim()).filter(Boolean);
-  const parsed = [];
-  let hasError = false;
-
-  for (const part of parts) {
-    const ts = parseTimeInput(part);
-    if (!ts) {
-      hasError = true;
-      break;
-    }
-    parsed.push(ts);
-  }
-
-  if (hasError || parsed.length === 0) {
-    els.timeInput.style.borderColor = '#ef4444';
-    setTimeout(() => { els.timeInput.style.borderColor = ''; }, 1500);
-    return;
-  }
-
-  if (!allTimestamps[selectedDate]) allTimestamps[selectedDate] = [];
-  allTimestamps[selectedDate].push(...parsed);
-  allTimestamps[selectedDate].sort((a, b) => a - b);
-
-  await saveTimestamps();
-  els.timeInput.value = '';
-  els.timeInput.focus();
-  updateUI();
-}
+// Day selection is driven by clicking a day in the Weekly Summary grid.
 
 async function removeTimestamp(index) {
-  if (mode === 'auto') {
-    if (!autoTimestamps[selectedDate]) return;
-    autoTimestamps[selectedDate].splice(index, 1);
-  } else {
-    if (!allTimestamps[selectedDate]) return;
-    allTimestamps[selectedDate].splice(index, 1);
-  }
+  if (!autoTimestamps[selectedDate]) return;
+  autoTimestamps[selectedDate].splice(index, 1);
   await saveTimestamps();
   updateUI();
 }
 
-// Get timestamps for selected date based on active mode
+// Get timestamps for the selected date (Auto/Portal store)
 function getActiveTimestamps(dateStr) {
-  if (mode === 'auto') return autoTimestamps[dateStr] || [];
-  return allTimestamps[dateStr] || [];
+  return autoTimestamps[dateStr] || [];
 }
 
 async function saveTimestamps() {
@@ -353,34 +235,20 @@ function calculateFromTimestamps(timestamps, useNowForOpen) {
 
 // ─── UI ───
 function updateUI() {
-  const now = new Date();
-  const todayIndex = now.getDay() - 1;
-  els.dayBadge.textContent = WEEK_DAYS[Math.max(0, Math.min(todayIndex, 4))];
+  // Current date & day (always today)
+  els.currentDateTime.textContent = new Date().toLocaleDateString([], {
+    weekday: 'long', day: 'numeric', month: 'short', year: 'numeric'
+  });
 
-  // Mode
-  els.btnManual.classList.toggle('active', mode === 'manual');
-  els.btnAuto.classList.toggle('active', mode === 'auto');
-  els.manualMode.style.display = mode === 'manual' ? 'block' : 'none';
-  els.autoMode.style.display = mode === 'auto' ? 'block' : 'none';
-
-  // Day selector
-  updateDaySelector();
-
-  // Get timestamps for selected day based on active mode
+  // Get timestamps for selected day
   const selectedTs = getActiveTimestamps(selectedDate);
   const viewingToday = isToday(selectedDate);
 
   let officeMs = 0, breakMs = 0;
 
-  if (mode === 'manual') {
-    renderTimestampList(selectedTs, viewingToday);
-  } else {
-    updateAutoUI();
-    // In auto mode, render the same timestamp list with delete buttons
-    renderTimestampList(selectedTs, viewingToday);
-  }
+  updateAutoUI();
+  renderTimestampList(selectedTs, viewingToday);
 
-  // Both modes use allTimestamps for calculation
   const calc = calculateFromTimestamps(selectedTs, viewingToday);
   officeMs = calc.officeMs;
   breakMs = calc.breakMs;
@@ -393,6 +261,7 @@ function updateUI() {
 
   els.officeTime.textContent = fmtTime(totalPresenceMs);
   els.workTime.textContent = fmtTime(officeMs);
+  els.breakTimeStat.textContent = fmtMin(breakMs);
   const remainMs = Math.max(0, WORK_MS - totalPresenceMs);
   els.remainingTime.textContent = fmtTime(remainMs);
 
@@ -401,72 +270,66 @@ function updateUI() {
   els.progressPercent.textContent = Math.round(progress) + '%';
   els.dayProgress.classList.toggle('complete', progress >= 100);
 
-  // Break
-  // Any total presence beyond the 9h target extends the break budget.
-  // e.g. if you're in office 9h20m total, you get 30+20 = 50min break allowance.
-  const extraPresenceMs = Math.max(0, totalPresenceMs - WORK_MS);
-  const selectedDayIndex = getDayIndex(selectedDate);
-  const carryOverMs = calculateCarryOver(selectedDayIndex);
-  const totalAvailableMs = BREAK_ALLOWANCE_MS + extraPresenceMs + carryOverMs;
-  const breakRemainingMs = Math.max(0, totalAvailableMs - breakMs);
-  const isOver = breakMs > totalAvailableMs;
-
-  els.breakUsed.textContent = fmtMin(breakMs);
-  els.carriedOver.textContent = fmtMin(carryOverMs);
-  els.totalBreakAvailable.textContent = fmtMin(totalAvailableMs);
-  els.breakRemaining.textContent = fmtMin(breakRemainingMs);
-
-  const ratio = Math.min(1, breakMs / (totalAvailableMs || 1));
-  els.breakArc.style.strokeDashoffset = CIRCLE_CIRCUMFERENCE * (1 - ratio);
-  els.breakArc.classList.toggle('over', isOver);
-
-  const highlightStrong = els.breakRemaining.closest('.break-row').querySelector('strong');
-  if (highlightStrong) highlightStrong.style.color = isOver ? '#dc2626' : '#16a34a';
-
-  if (isOver) {
-    els.breakNote.textContent = 'Break exceeded by ' + fmtMin(breakMs - totalAvailableMs) + '!';
-    els.breakNote.className = 'break-note visible warning';
-  } else if (breakRemainingMs > 0 && breakMs > 0) {
-    els.breakNote.textContent = 'You can still take ' + fmtMin(breakRemainingMs) + ' break';
-    els.breakNote.className = 'break-note visible';
-  } else {
-    els.breakNote.className = 'break-note';
-  }
+  // Average work time across the selected weekdays
+  updateAvgWorkTime();
 
   // Weekly
   updateWeekGrid(selectedDate);
   updateWeekTotals();
 }
 
-function updateDaySelector() {
-  const today = getTodayStr();
-  const monday = dateToStr(getMonday(new Date()));
+// ─── Average Work Time ───
+// avgSelectedDays holds weekday indices (0=Mon .. 4=Fri) chosen by the user.
+function updateAvgWorkTime() {
+  const monday = getMonday(new Date());
+  const todayStr = getTodayStr();
 
-  // Update label
-  if (isToday(selectedDate)) {
-    els.selectedDayName.textContent = 'Today';
-  } else {
-    els.selectedDayName.textContent = formatDayName(selectedDate);
+  // Reflect selection state on the chips
+  els.avgDaySelector.querySelectorAll('.avg-day-chip').forEach(chip => {
+    const idx = parseInt(chip.dataset.index, 10);
+    chip.classList.toggle('active', avgSelectedDays.has(idx));
+  });
+
+  if (avgSelectedDays.size === 0) {
+    els.avgWorkValue.textContent = '--';
+    els.avgWorkSub.textContent = 'No day selected';
+    return;
   }
-  els.selectedDayDate.textContent = formatDateShort(selectedDate);
 
-  // Disable next if already today
-  els.btnNextDay.disabled = (selectedDate >= today);
-  // Disable prev if already Monday of this week
-  els.btnPrevDay.disabled = (selectedDate <= monday);
+  let totalWork = 0;
+  let daysWithData = 0;
+
+  for (const idx of avgSelectedDays) {
+    const d = new Date(monday);
+    d.setDate(d.getDate() + idx);
+    const dateStr = dateToStr(d);
+    const ts = getActiveTimestamps(dateStr);
+    if (ts.length === 0) continue;
+    const calc = calculateFromTimestamps(ts, dateStr === todayStr);
+    totalWork += calc.officeMs; // work time = office time excluding breaks
+    daysWithData++;
+  }
+
+  if (daysWithData === 0) {
+    els.avgWorkValue.textContent = '0h 0m';
+    els.avgWorkSub.textContent = `${avgSelectedDays.size} day(s) selected · no data yet`;
+    return;
+  }
+
+  const avg = totalWork / daysWithData;
+  els.avgWorkValue.textContent = fmtTime(avg);
+  els.avgWorkSub.textContent =
+    `Average of ${daysWithData} day${daysWithData > 1 ? 's' : ''} worked`;
 }
 
 function renderTimestampList(timestamps, useNowForOpen) {
-  // Render into the correct container based on mode
-  const container = mode === 'auto' ? els.autoSwipeList : els.timestampList;
+  const container = els.autoSwipeList;
   container.innerHTML = '';
 
   if (!timestamps || timestamps.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'ts-empty';
-    empty.textContent = mode === 'auto'
-      ? 'No swipes yet. Click "Fetch from Portal" to load.'
-      : 'No timestamps yet. Add your first swipe time above.';
+    empty.textContent = 'No swipes yet. Click "Fetch from Portal" to load.';
     container.appendChild(empty);
     return;
   }
@@ -589,26 +452,6 @@ function parseSwipeTimeStr(str, refDate) {
   }
 
   return null;
-}
-
-function calculateCarryOver(dayIndex) {
-  let carry = 0;
-  const monday = getMonday(new Date());
-  for (let i = 0; i < dayIndex && i < 5; i++) {
-    const d = new Date(monday);
-    d.setDate(d.getDate() + i);
-    const dateStr = dateToStr(d);
-    const ts = getActiveTimestamps(dateStr);
-    if (ts.length > 0) {
-      const calc = calculateFromTimestamps(ts, false);
-      const presence = calc.officeMs + calc.breakMs;
-      const extra = Math.max(0, presence - WORK_MS);
-      const effectiveAllowance = BREAK_ALLOWANCE_MS + extra;
-      const unused = Math.max(0, effectiveAllowance - calc.breakMs);
-      carry += unused;
-    }
-  }
-  return carry;
 }
 
 function updateWeekGrid(selectedDateStr) {

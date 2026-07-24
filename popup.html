@@ -10,95 +10,35 @@
 
 <body>
   <div class="container">
-    <!-- Header -->
-    <div class="header">
+    <!-- 1. Header (centered) -->
+    <div class="header centered">
       <h1>ZingTrack</h1>
-      <div class="header-right">
-        <span class="badge" id="dayBadge">Mon</span>
+    </div>
+
+    <!-- 2. Current date & day -->
+    <div class="date-display" id="currentDateTime">--</div>
+
+    <!-- 3. Fetch from portal -->
+    <div class="card">
+      <div class="card-title">Zing Portal</div>
+      <div class="status-banner no-portal" id="statusBanner">
+        <span id="statusText">Click "Fetch from Portal" to load data</span>
+      </div>
+      <button class="btn-add" id="btnRefreshPortal" style="width:100%;">Fetch from Portal</button>
+      <div class="auto-help">Open the TimeCard page on portal.zinghr.com, then click Fetch.</div>
+      <div class="portal-row" style="margin-top:10px;">
+        <span>Last Synced</span>
+        <strong id="lastSynced">Never</strong>
       </div>
     </div>
 
-    <!-- Mode Toggle -->
-    <div class="mode-toggle">
-      <button class="mode-btn active" id="btnManual" data-mode="manual">Manual</button>
-      <button class="mode-btn" id="btnAuto" data-mode="auto">Auto (Portal)</button>
+    <!-- 4. Weekly Summary — grid -->
+    <div class="card">
+      <div class="card-title">Weekly Summary</div>
+      <div class="week-grid" id="weekGrid"></div>
     </div>
 
-    <!-- Manual Mode -->
-    <div id="manualMode">
-      <div class="card">
-        <div class="card-title">Swipe Times</div>
-
-        <!-- Day Selector -->
-        <div class="day-selector">
-          <button class="day-nav" id="btnPrevDay">&lsaquo;</button>
-          <div class="day-label">
-            <span id="selectedDayName">Today</span>
-            <span class="day-date" id="selectedDayDate"></span>
-          </div>
-          <button class="day-nav" id="btnNextDay">&rsaquo;</button>
-        </div>
-
-        <div class="timestamp-help">Timestamps alternate: 1st = IN, 2nd = OUT, 3rd = IN, ...</div>
-        <div class="timestamp-input-row">
-          <input type="text" id="timeInput" placeholder="e.g. 10:58 am, 01:51 pm, 02:24 pm" class="time-input" />
-          <button class="btn-add" id="btnAddTime">+ Add</button>
-        </div>
-        <div class="timestamp-list" id="timestampList"></div>
-        <div class="timestamp-actions">
-          <button class="btn-link danger" id="btnClearDay">Clear Day</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Auto Mode -->
-    <div id="autoMode" style="display:none;">
-      <div class="card">
-        <div class="card-title">Zing Portal (Auto)</div>
-        <div class="status-banner no-portal" id="statusBanner">
-          <span id="statusText">Open zingnext.zinghr.com to sync</span>
-        </div>
-        <div class="portal-info">
-          <div class="portal-row">
-            <span>Punch Status</span>
-            <strong id="punchStatus">--</strong>
-          </div>
-          <div class="portal-row">
-            <span>Shift</span>
-            <strong id="portalShift">--</strong>
-          </div>
-          <div class="portal-row">
-            <span>Hours</span>
-            <strong id="portalHours">--</strong>
-          </div>
-          <div class="portal-row">
-            <span>Deficit</span>
-            <strong id="portalDeficit">--</strong>
-          </div>
-          <div class="portal-row">
-            <span>Status</span>
-            <strong id="portalAttendance">--</strong>
-          </div>
-          <div class="portal-row">
-            <span>Last Synced</span>
-            <strong id="lastSynced">Never</strong>
-          </div>
-        </div>
-        <div class="auto-swipes-section">
-          <div class="card-title" style="margin-top:10px;">Swipe Times</div>
-          <div class="timestamp-list" id="autoSwipeList"></div>
-        </div>
-        <div class="auto-actions">
-          <button class="btn-add" id="btnRefreshPortal" style="width:100%;margin-top:10px;">Fetch from Portal</button>
-          <div class="auto-help">Open the TimeCard page on portal.zinghr.com, then click Fetch.</div>
-        </div>
-        <div class="timestamp-actions">
-          <button class="btn-link danger" id="btnClearAutoDay">Clear Day</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Selected Day Overview -->
+    <!-- 5. Today's Progress -->
     <div class="card">
       <div class="card-title" id="progressTitle">Today's Progress</div>
       <div class="progress-bar-container">
@@ -110,12 +50,16 @@
       </div>
       <div class="stats-row">
         <div class="stat">
-          <span class="stat-label">Office Time</span>
+          <span class="stat-label">Total Time</span>
           <span class="stat-value" id="officeTime">0h 0m</span>
         </div>
         <div class="stat">
           <span class="stat-label">Work Time</span>
           <span class="stat-value" id="workTime">0h 0m</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Break</span>
+          <span class="stat-value" id="breakTimeStat">0m</span>
         </div>
         <div class="stat">
           <span class="stat-label">Remaining</span>
@@ -124,46 +68,59 @@
       </div>
     </div>
 
-    <!-- Break Tracker -->
+    <!-- 6. Swipe Times -->
     <div class="card">
-      <div class="card-title">Break Time</div>
-      <div class="break-stats">
-        <div class="break-circle">
-          <svg viewBox="0 0 100 100">
-            <circle class="bg" cx="50" cy="50" r="42"></circle>
-            <circle class="fill" cx="50" cy="50" r="42" id="breakArc"></circle>
-          </svg>
-          <div class="break-center">
-            <span id="breakUsed">0m</span>
-            <small>used</small>
-          </div>
+      <div class="card-title">Swipe Times</div>
+      <div class="portal-info">
+        <div class="portal-row">
+          <span>Punch Status</span>
+          <strong id="punchStatus">--</strong>
         </div>
-        <div class="break-info">
-          <div class="break-row">
-            <span>Today's Allowance</span>
-            <strong>30m</strong>
-          </div>
-          <div class="break-row">
-            <span>Carried Over</span>
-            <strong id="carriedOver">0m</strong>
-          </div>
-          <div class="break-row">
-            <span>Total Available</span>
-            <strong id="totalBreakAvailable">30m</strong>
-          </div>
-          <div class="break-row highlight">
-            <span>Remaining</span>
-            <strong id="breakRemaining">30m</strong>
-          </div>
+        <div class="portal-row">
+          <span>Shift</span>
+          <strong id="portalShift">--</strong>
+        </div>
+        <div class="portal-row">
+          <span>Hours</span>
+          <strong id="portalHours">--</strong>
+        </div>
+        <div class="portal-row">
+          <span>Deficit</span>
+          <strong id="portalDeficit">--</strong>
+        </div>
+        <div class="portal-row">
+          <span>Status</span>
+          <strong id="portalAttendance">--</strong>
         </div>
       </div>
-      <div class="break-note" id="breakNote"></div>
+      <div class="auto-swipes-section">
+        <div class="timestamp-list" id="autoSwipeList" style="margin-top:10px;"></div>
+      </div>
+      <div class="timestamp-actions">
+        <button class="btn-link danger" id="btnClearAutoDay">Clear Day</button>
+      </div>
     </div>
 
-    <!-- Weekly Summary -->
+    <!-- 7. Average Work Time -->
     <div class="card">
-      <div class="card-title">Weekly Summary</div>
-      <div class="week-grid" id="weekGrid"></div>
+      <div class="card-title">Average Work Time</div>
+      <div class="avg-help">Select one or more days to see the average work time across them.</div>
+      <div class="avg-day-selector" id="avgDaySelector">
+        <button class="avg-day-chip" data-index="0">Mon</button>
+        <button class="avg-day-chip" data-index="1">Tue</button>
+        <button class="avg-day-chip" data-index="2">Wed</button>
+        <button class="avg-day-chip" data-index="3">Thu</button>
+        <button class="avg-day-chip" data-index="4">Fri</button>
+      </div>
+      <div class="avg-result">
+        <div class="avg-value" id="avgWorkValue">--</div>
+        <div class="avg-sub" id="avgWorkSub">No day selected</div>
+      </div>
+    </div>
+
+    <!-- 8. Weekly Summary — totals -->
+    <div class="card">
+      <div class="card-title">Weekly Totals</div>
       <div class="weekly-totals">
         <div class="stat">
           <span class="stat-label">Week Office</span>
