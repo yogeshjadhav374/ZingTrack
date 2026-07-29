@@ -6,7 +6,6 @@ const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 // DOM refs
 const $ = (id) => document.getElementById(id);
 const els = {
-  currentDateTime: $('currentDateTime'),
   // Auto (Portal) mode
   statusBanner: $('statusBanner'),
   statusText: $('statusText'),
@@ -235,11 +234,6 @@ function calculateFromTimestamps(timestamps, useNowForOpen) {
 
 // ─── UI ───
 function updateUI() {
-  // Current date & day (always today)
-  els.currentDateTime.textContent = new Date().toLocaleDateString([], {
-    weekday: 'long', day: 'numeric', month: 'short', year: 'numeric'
-  });
-
   // Get timestamps for selected day
   const selectedTs = getActiveTimestamps(selectedDate);
   const viewingToday = isToday(selectedDate);
@@ -386,7 +380,7 @@ function updateAutoUI() {
     els.portalHours.textContent = '--';
     els.portalDeficit.textContent = '--';
     els.portalAttendance.textContent = '--';
-    els.lastSynced.textContent = 'Never';
+    els.lastSynced.textContent = new Date().toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + ' · Never';
     return;
   }
 
@@ -407,13 +401,16 @@ function updateAutoUI() {
   els.portalDeficit.textContent = data.deficit || '--';
   els.portalAttendance.textContent = data.attendanceStatus || '--';
 
-  // Last synced
+  // Last synced — show date + time together
   const scrapedAt = data.scrapedAt || (portalData && portalData.scrapedAt);
+  const todayStr = new Date().toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
   if (scrapedAt) {
     const syncDate = new Date(scrapedAt);
-    els.lastSynced.textContent = syncDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const dateStr = syncDate.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+    const timeStr = syncDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    els.lastSynced.textContent = `${dateStr} · ${timeStr}`;
   } else {
-    els.lastSynced.textContent = 'Never';
+    els.lastSynced.textContent = `${todayStr} · Never`;
   }
 }
 

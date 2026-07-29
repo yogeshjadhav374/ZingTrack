@@ -727,3 +727,50 @@ body {
   background: rgba(0, 0, 0, 0.06);
   color: #94a3b8;
 }
+
+/* ============================================================
+   COMPACT MODE — fit all sections without scrolling.
+   Appended last so these values win over the rules above.
+   ============================================================ */
+.container { padding: 10px 12px; }
+
+/* Header + date */
+.header.centered { margin-bottom: 2px; }
+.header h1 { font-size: 17px; }
+.date-display { font-size: 11px; margin-bottom: 8px; }
+
+/* Cards */
+.card { padding: 9px 11px; margin-bottom: 8px; border-radius: 11px; }
+.card-title { margin-bottom: 6px; font-size: 10px; }
+
+/* Fetch section */
+.status-banner { padding: 6px 10px; margin-bottom: 8px; font-size: 11px; }
+.btn-add { padding: 7px 14px; font-size: 12px; }
+.auto-help { margin-top: 6px; font-size: 9px; }
+.portal-row { font-size: 11px; }
+.portal-row strong { font-size: 12px; }
+.portal-info { gap: 4px; }
+
+/* Weekly summary grid */
+.week-grid { gap: 5px; margin-bottom: 0; }
+.week-day { padding: 6px 3px; border-radius: 8px; }
+.week-day-name { margin-bottom: 2px; }
+.week-day-hours { font-size: 12px; }
+
+/* Today's progress */
+.progress-labels { margin-bottom: 8px; }
+.stat-value { font-size: 14px; }
+
+/* Swipe times list — cap height so long lists scroll internally */
+.timestamp-list { max-height: 108px; gap: 3px; }
+.timestamp-actions { margin-top: 6px; }
+
+/* Average work time */
+.avg-help { margin-bottom: 7px; font-size: 10px; }
+.avg-day-selector { gap: 5px; margin-bottom: 7px; }
+.avg-day-chip { padding: 6px 0; font-size: 11px; }
+.avg-result { padding: 2px 0 0; }
+.avg-value { font-size: 20px; }
+
+/* Footer */
+.footer { padding-top: 2px; }
